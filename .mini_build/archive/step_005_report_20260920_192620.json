@@ -1,0 +1,35 @@
+{
+  "step_no": 5,
+  "status": "DONE",
+  "files_created": [
+    "src/architecture_assistant/domain/audit.py",
+    "src/architecture_assistant/ports/transactions.py",
+    "src/architecture_assistant/application/adr_manager.py",
+    "src/architecture_assistant/application/risk_manager.py",
+    "tests/test_adr_manager.py",
+    "tests/test_risk_manager.py",
+    "tests/test_audit_trail.py"
+  ],
+  "files_changed": [
+    "src/architecture_assistant/domain/__init__.py",
+    "src/architecture_assistant/ports/__init__.py",
+    "src/architecture_assistant/ports/repositories.py",
+    "src/architecture_assistant/application/__init__.py",
+    "src/architecture_assistant/infrastructure/__init__.py",
+    "src/architecture_assistant/infrastructure/migrations.py",
+    "src/architecture_assistant/infrastructure/repositories.py",
+    "src/architecture_assistant/infrastructure/sqlite.py",
+    "tests/test_migrations.py",
+    "tests/test_repositories.py"
+  ],
+  "files_deleted": [],
+  "tests": {
+    "passed": 680,
+    "failed": 0,
+    "command": "python -m pytest -q"
+  },
+  "dependencies_added": [],
+  "architecture_questions": [],
+  "issues": [],
+  "summary": "Step 5 (ARCHITECTURE) DONE - ADR + Risk Register with an append-only audit trail. All six approved corrections are implemented. (1) ONE service call = ONE AuditEntry: supersede(old_id, successor_id) writes a single entry with entity_type=ADR, entity_id=old_id, action=SUPERSEDE and a structured detail carrying old_id, successor_id, old_status, old_status_after and successor_status; a smoke run confirms exactly one SUPERSEDE entry for the two-sided relationship. (2) Mutation + audit are atomic in this step: a new minimal TransactionPort (ports/transactions.py) plus its SQLite implementation SqliteTransactionPort (infrastructure/sqlite.py) give the managers an explicit BEGIN IMMEDIATE/COMMIT/ROLLBACK boundary over the shared connection with no sqlite3 import in the application layer. (3) The repository adapters no longer commit per write while an outer boundary owns the connection: _SqliteRepository._execute_write commits only when isolation_level is not None, so inside a transaction every ADR/Risk/Task/etc. write joins the boundary transaction, while standalone adapter usage (used by earlier steps' tests) keeps committing on its own. (4) All mandated atomicity tests exist for both managers: audit append failure rolls the domain write back, domain write failure skips the audit entry, a successful call persists both, a reconnect after commit sees both state and audit, and rollback after failure leaves neither; plus a test that the connection stays usable after a rollback. (5) AuditEntry.detail is a deterministic JSON-serializable Mapping (never free-form prose): the model rejects a non-JSON-serializable payload and exposes detail_json() with sorted keys, stored in audit_entries.detail TEXT. (6) The rest is as approved: ADR versioning (propose = version 1, amend = version + 1, status changes do not bump the version), the deterministic ADR lifecycle PROPOSED->{ACCEPTED,REJECTED}, ACCEPTED->{DEPRECATED,SUPERSEDED}, DEPRECATED->SUPERSEDED with REJECTED/SUPERSEDED terminal, the deterministic risk lifecycle OPEN->{MITIGATED,ACCEPTED,CLOSED}, MITIGATED/ACCEPTED->CLOSED, CLOSED->OPEN, mandatory injected clock (a guard test asserts neither manager module reads the system time), append-only audit_entries (migration v2, indexed, no update/delete on the port or adapter), and authoritative DB state with ContextSnapshot left derived/read-only. Files: domain/audit.py (AuditEntityType, AuditAction, AuditEntry); ports/transactions.py (TransactionPort); ports/repositories.py (+AuditRepository); infrastructure (migration v2 audit_entries + index, SqliteAuditRepository, SqliteTransactionPort, transaction-aware write path); application/adr_manager.py (ADRManager) and application/risk_manager.py (RiskManager) with per-manager error hierarchies (AdrManagerError/AdrNotFoundError/InvalidAdrStatusTransitionError/InvalidSupersessionError, RiskManagerError/RiskNotFoundError/InvalidRiskStatusTransitionError). Scope respected: no plugin core (Step 6), no AI/API/UI/loop. VERIFICATION: python -m pytest -q -> 680 passed, 0 failed (100 new tests: 41 ADR manager, 38 risk manager, 20 audit-trail/transaction-boundary, 1 migration). The Step 4 architecture self-check still passes over the enlarged tree: 22 modules, 0 violations, compliant, with sqlite3 imported only by infrastructure modules. The only pre-existing tests that had to be updated were the hard-coded applied_versions == (1,) assertions, which now derive the expected versions from MIGRATIONS itself."
+}

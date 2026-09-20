@@ -1,0 +1,20 @@
+{
+  "step_no": 3,
+  "status": "DONE",
+  "files_created": [
+    "src/architecture_assistant/application/__init__.py",
+    "src/architecture_assistant/application/context.py",
+    "tests/test_context.py"
+  ],
+  "files_changed": [],
+  "files_deleted": [],
+  "tests": {
+    "passed": 516,
+    "failed": 0,
+    "command": "python -m pytest -q"
+  },
+  "dependencies_added": [],
+  "architecture_questions": [],
+  "issues": [],
+  "summary": "Step 3 (CONTEXT) DONE. Context Manager implemented as a new application layer (src/architecture_assistant/application/context.py) that imports ONLY domain and ports - no infrastructure, no sqlite3, verified by grep and by a source-guard test. ContextBuilder takes the repository PORTS (ProjectRepository, StepRepository, ADRRepository, RiskRepository, ArchitectureVersionRepository) so it is decoupled from SQLite and testable with fake ports. ContextSnapshot is a frozen, derived, read-only value object: ephemeral, never written to SQLite and never a source of truth; a test asserts row counts in every table are unchanged after build(). No chat-history dump: the snapshot holds structured domain objects only. Targeted reads only: steps.list_by_state(VERIFIED) and risks.list_open(); tasks, findings and decisions are never queried. Selection rules are deterministic - previous_steps = VERIFIED steps with step_no < target, adrs = status ACCEPTED, risks = status OPEN, architecture = the single is_current version. Invariants enforced instead of silent fallbacks: projects 0 -> ProjectNotFoundError, >1 -> ContextInvariantError (never 'first record'); current architecture >1 -> ContextInvariantError, 0 -> architecture=None as a documented temporary bootstrap state until Step 4 establishes the baseline; snapshot.project is NOT Optional (no partially valid snapshot). Clock injection is mandatory and keyword-only: ApplicationContextBuilder never reads the system time, enforced by a test that scans the module source for datetime.now/utc_now. Error hierarchy: ContextError base with StepNotFoundError, ProjectNotFoundError, ContextInvariantError. to_dict() produces a deterministic JSON-safe payload (schema_version, generated_at, project, step, previous_steps, architecture, adrs, risks). 47 new tests (fake-port unit tests + real SQLite integration tests incl. reconnect determinism). Scope respected: no AI, no API, no UI, no plugins, no loop/orchestration. No domain, port, schema or infrastructure files were modified."
+}

@@ -1,0 +1,42 @@
+{
+  "step_no": 11,
+  "status": "DONE",
+  "files_created": [
+    "src/architecture_assistant/application/architecture_evolution.py",
+    "src/architecture_assistant/composition/evolution.py",
+    "tests/test_architecture_evolution.py"
+  ],
+  "files_changed": [
+    "src/architecture_assistant/domain/enums.py",
+    "src/architecture_assistant/domain/models.py",
+    "src/architecture_assistant/domain/audit.py",
+    "src/architecture_assistant/domain/__init__.py",
+    "src/architecture_assistant/ports/repositories.py",
+    "src/architecture_assistant/ports/storage.py",
+    "src/architecture_assistant/ports/__init__.py",
+    "src/architecture_assistant/infrastructure/migrations.py",
+    "src/architecture_assistant/infrastructure/repositories.py",
+    "src/architecture_assistant/infrastructure/storage.py",
+    "src/architecture_assistant/infrastructure/__init__.py",
+    "src/architecture_assistant/application/architecture_bootstrap.py",
+    "src/architecture_assistant/application/__init__.py",
+    "src/architecture_assistant/composition/root.py",
+    "src/architecture_assistant/composition/__init__.py",
+    "tests/test_composition.py",
+    "tests/test_storage_port.py",
+    "tests/test_audit_trail.py",
+    "tests/test_models.py",
+    "tests/test_repositories.py",
+    "tests/test_migrations.py"
+  ],
+  "files_deleted": [],
+  "tests": {
+    "passed": 1225,
+    "failed": 0,
+    "command": "python -m pytest -q"
+  },
+  "dependencies_added": [],
+  "architecture_questions": [],
+  "issues": [],
+  "summary": "Step 11 (Architecture Evolution) realizēts pēc revidētā plāna un visiem 5 papildu precizējumiem. (1) ACR kā PERSISTENTS authoritative state: jauns ACRStatus (tieši PROPOSED/APPROVED/REJECTED/APPLIED - bez CONFLICT/CANCELLED) domain/enums.py; frozen ArchitectureChangeRequest (request_id, title, rationale, source_version, target_version, rule_ids, adr_id, roadmap_impact, status, created_at, approved_by, approved_at, applied_at) domain/models.py ar invariantiem: target != source, rule_ids ne-tukšs, APPROVED => approved_by + approved_at, APPLIED => + applied_at, PROPOSED/REJECTED => approved_by/approved_at/applied_at = None; AuditEntityType.ACR; ports ArchitectureChangeRequestRepository (upsert/get/list/list_by_status/delete) + StoragePort.change_requests (10 accessors); SqliteArchitectureChangeRequestRepository + migrācija v3 (architecture_change_requests + idx_change_requests_status; TABLE_NAMES/CHANGE_REQUEST_TABLE_NAME). ArchitectureVersion/ADR/Risk modeļi NETIKA mainīti. (2) Lifecycle use-case application/architecture_evolution.py: propose(request, adr=AdrSpec) -> ACR PROPOSED + ADR PROPOSED; approve(request_id, approved_by) -> ADR ACCEPTED + ACR APPROVED + approved_by/at; reject(request_id, reason) -> ADR REJECTED + ACR REJECTED un baseline NETIEK aiztikts; apply(request_id) -> tikai persistēts APPROVED + ACCEPTED ADR -> Step 9 primitīvs introduce(target, supersedes=source) + deklarēto risku reģistrācija + ACR APPLIED + applied_at. (3) Viena ārējā transaction boundary, kad viena operācija skar vairākus agregātus: ACR + ADR (propose/approve/reject) un ACR + ADR + ArchitectureVersion + Risk (apply) commit/rollback kopā; tests pierāda, ka konflikts PĒC versijas roll-over (deklarētais risks ar citu saturu) atritina VISU transakciju - ACR paliek APPROVED bez applied_at, vecā versija paliek vienīgā current, jaunā versija neeksistē, audita trails un ADR/Risk rindas nav mainījušās. (4) REJECTED ACR nekad neatgriežas: approve pēc reject met ArchitectureEvolutionConflictError (\"a rejected request is never revived\"), apply met ArchitectureEvolutionNotApprovedError; tāda pati ideja prasa jaunu request_id. (5) APPLIED ir termināls: atkārtots apply(APPLIED) ir tīrs no-op - tikai verifikācija (vienīgā current == target, source.superseded_by == target, Step 9 primitīvs atkārtoti apstiprina saturu un NEKO neraksta), bez jaunas ArchitectureVersion, bez jauna riska, bez jauna audita ieraksta, ACR rinda nemainās (outcome=already-present). Repository delete paliek tikai kontrakta konsekvencei - ArchitectureEvolution to NEIZMANTO (tests pārbauda, ka dzinēja modulī nav .delete izsaukuma). (6) Structured linkage, nevis teksta parsēšana: saites ir ACR.adr_id + source_version + target_version; ADR proza ir tikai cilvēkam (testā versijas numurs apzināti NAV ADR tekstā), roadmap_impact ir strukturēts, vaicājams lauks (piem. 'kurš ACR ietekmē step-013?'). (7) Nav apiešanas ceļa: apply ir tikai (self, request_id) - inspect.signature tests; in-memory 'APPROVED' objekts bez persistēta stāvokļa neko nenozīmē (tests); ADRManager.accept ārpus dzinēja pats par sevi nedod tiesības uz versiju, jo apply lasa TIKAI persistēto ACR statusu. (8) Fail-closed pārbaudes: tieši viena current versija (>1 -> 'refusing to evolve a forked baseline'), target versijai jābūt koda pusē deklarētai ('the engine never invents one'), rule_ids jāsakrīt ar kanoniskās baseline rule_ids, un pēc ieraksta postcondition atkārtoti nolasa store (single current == target). Kanoniskos versiju ierakstus injicē composition (canonical_versions no ARCHITECTURE_V1/V1_1); engine imports tikai application/domain/ports. (9) Kompozīcija: composition/evolution.py (DeclaredChange, DECLARED_CHANGES ar v1.0 -> v1.1, canonical_versions, declared_risks, build_evolution, reconcile_declared_changes, ReconciliationSummary.version_summary) + composition/root.py - engine dzen ķēdi caur reconcile_declared_changes() (propose -> approve -> apply), kas ir VIENĪGĀ vieta, kur vēsturiskais v1.0 -> v1.1 apstiprinājums tiek rekonstruēts kā STATE (cilvēks to apstiprināja Step 9 laikā; nekas netiek pārrakstīts). Composition atklāj evolution/evolution_summary, kā arī saglabā Step 9 API versioning/versioning_summary (tagad no dzinēja apply summary - version_outcome, superseded, adrs_already_present - tāpēc visi Step 9 testi paliek zaļi bez izmaiņām). Migrētai Step 9/10 DB (v1.1 jau current, ACR vēl nav) reconciliācija ir idempotenta: version_outcome=already-present, v1.0 baseline/rules/created_at neskarti, ACR tiek izveidots un APPLIED, ADR-008 fiksējas ACCEPTED, un risks RISK-006 (composition layer drift, deklarēts ar ACR-001) tiek reģistrēts - tāpēc test_composition risku skaits mainīts 5 -> 6 un tur pievienota Step 11 pārbaude. (10) Self-check: ArchitectureValidator pār pašu koku - 38 moduļi, 0 pārkāpumu, enforced baseline 1.1 (v1.2 NETIKA ieviests); atsevišķi testi fiksē, ka dzinējs neimportē architecture/infrastructure/composition/sqlite3, ka neviens slānis nav ieguvis jaunu atļauju un ka composition ir vienīgā vieta, kas lasa koda baseline. (11) Testi: python -m pytest -q -> 1225 passed, 0 failed (1139 -> 1225); jauns tests/test_architecture_evolution.py ar 54 testiem (restart persistence, lifecycle, approval, rejection, apply, fail-closed, strukturētās saites, deklarētais katalogs, slāņu robežas, domēna vārdnīca) + atjaunināti test_composition/test_storage_port/test_audit_trail/test_models/test_repositories/test_migrations. (12) Apzinātā domēna paplašināšana (lietotāja apstiprināta ARCHITECTURE_QUESTION) ir tikai tā, kas nepieciešama: ACRStatus, ArchitectureChangeRequest, AuditEntityType.ACR, viens ports, viens adapteris, migrācija v3; ArchitectureVersion/ADR/Risk paliek neskarti, baseline paliek v1.1. Ārpus apjoma NAV ieviests: OpenAI/Claude/Grok, Judge, majority-vote, v1.2 shipped baseline, roadmap replanning, UI, un-supersede rollback; application/plugin_core.py:19 unused Optional imports (Step 6 paliekošs) un architecture/__init__.py dublētais astes bloks apzināti NAV aiztikti - tie ir pre-existing un nav šī soļa defekti."
+}

@@ -1,0 +1,25 @@
+{
+  "step_no": 4,
+  "status": "DONE",
+  "files_created": [
+    "src/architecture_assistant/architecture/__init__.py",
+    "src/architecture_assistant/architecture/model.py",
+    "src/architecture_assistant/architecture/rules.py",
+    "src/architecture_assistant/architecture/scanner.py",
+    "src/architecture_assistant/architecture/validator.py",
+    "tests/test_architecture.py"
+  ],
+  "files_changed": [],
+  "files_deleted": [],
+  "tests": {
+    "passed": 580,
+    "failed": 0,
+    "command": "python -m pytest -q"
+  },
+  "dependencies_added": [],
+  "architecture_questions": [],
+  "issues": [
+    "The REVISE/APPROVE message referenced corrections but contained only the unrestored placeholder text '[ielīmē manu iepriekšējo REVISE PLAN tekstu]'. No correction text was ever received (I asked once and the same placeholder came back), so Step 4 was implemented exactly per the previously approved plan with no additional corrections applied. If real corrections existed, this step should be REVISED."
+  ],
+  "summary": "Step 4 (ARCHITECTURE) DONE. Architecture Baseline v1.0 defined as a new 'architecture' layer (src/architecture_assistant/architecture) importing only domain plus the standard library. model.py: immutable SourceModel (derived readonly view: module -> imports), RuleViolation, ValidationResult and the ArchitectureBaseline/ArchitectureRule value objects with structural validation. rules.py: the authoritative ARCHITECTURE_V1 baseline with KNOWN_LAYERS (domain, ports, application, architecture, infrastructure), the explicit ALLOWED_IMPORTS dependency matrix (domain -> {}; ports -> {domain}; application -> {domain, ports}; architecture -> {domain}; infrastructure -> {domain, ports}) and three deterministic rules: unknown-layer (HIGH), forbidden-layer-import (HIGH), sqlite-outside-infrastructure (CRITICAL). scanner.py: deterministic stdlib-ast SourceModel builder - module_name_for handles __init__.py packages, extract_imports resolves relative imports (level 1 and 2+, including 'from . import x') to absolute module names, build_source_model is pure over {path: text}, scan_directory reads the tree. validator.py: ArchitectureValidator runs every baseline rule, collects violations and sorts them by (rule_id, module, target, message) so results are fully reproducible; ValidationResult exposes is_compliant, violation_count, violations_for() and a JSON-safe to_dict(). A violation is a reproducible fact about an import statement - no AI, no heuristics, no fuzzy matching. Self-check: scanning the real src/architecture_assistant yields 18 modules and 0 violations, and a test asserts sqlite3 is imported only under infrastructure. 64 new tests (layer helper, every rule positive+negative, baseline invariants, scanner incl. relative imports, validator determinism/serialization, self-check). Scope respected: no ADR/Risk Manager (Step 5), no plugin core (Step 6), no AI/API/UI/loop; no domain/ports/infrastructure/application file was modified; no architecture change outside Step 4."
+}

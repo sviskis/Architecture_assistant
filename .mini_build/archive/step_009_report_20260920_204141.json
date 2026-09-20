@@ -1,0 +1,39 @@
+{
+  "step_no": 9,
+  "status": "DONE",
+  "files_created": [
+    "src/architecture_assistant/composition/__init__.py",
+    "src/architecture_assistant/composition/root.py",
+    "src/architecture_assistant/application/orchestrator.py",
+    "src/architecture_assistant/application/scheduler.py",
+    "src/architecture_assistant/application/loop_policy.py",
+    "src/architecture_assistant/application/architecture_versioning.py",
+    "tests/test_orchestrator.py",
+    "tests/test_scheduler.py",
+    "tests/test_loop_policy.py",
+    "tests/test_architecture_versioning.py",
+    "tests/test_composition.py"
+  ],
+  "files_changed": [
+    "src/architecture_assistant/architecture/rules.py",
+    "src/architecture_assistant/architecture/__init__.py",
+    "src/architecture_assistant/architecture/validator.py",
+    "src/architecture_assistant/domain/audit.py",
+    "src/architecture_assistant/ports/capabilities.py",
+    "src/architecture_assistant/ports/__init__.py",
+    "src/architecture_assistant/application/architecture_bootstrap.py",
+    "src/architecture_assistant/application/__init__.py",
+    "tests/test_architecture.py",
+    "tests/test_audit_trail.py"
+  ],
+  "files_deleted": [],
+  "tests": {
+    "passed": 1079,
+    "failed": 0,
+    "command": "python -m pytest -q"
+  },
+  "dependencies_added": [],
+  "architecture_questions": [],
+  "issues": [],
+  "summary": "Step 9 (Orchestrator + Scheduler) implementēts saskaņā ar apstiprinātajām 14 korekcijām. (1) APSTIPRINĀTAIS composition slānis: architecture_assistant/composition/ (root.py ar compose()/Composition/CompositionConfig/baseline_v1/baseline_v1_1) - vienīgais slānis, kam drīkst importēt domain/ports/application/architecture/infrastructure, un satur TIKAI wiring (tests aizliedz requires_approval/decide_review/StepState/StepEvent/StepStateMachine tekstu). Esošo slāņu atļaujas NAV paplašinātas: application joprojām nevar importēt architecture/infrastructure (pārbaudīts katram aplikācijas modulim), ports/domain neskarti, neviens slānis nevar importēt composition, composition neimportē sqlite3. (2) Architecture v1.0 NAV pārrakstīta in-place: rules.py tur V1_KNOWN_LAYERS/V1_ALLOWED_IMPORTS/V1_RULES/ARCHITECTURE_V1 kā iesaldētu vēsturi (rule checks parametrizēti ar sasaldēto matricu, tāpēc v1.0 nozīme nemainās), un ARCHITECTURE_V1_1 pievieno TIEŠI vienu slāni 'composition' (composition -> visi 5; neviens -> composition). ARCHITECTURE_BASELINES=(1.0,1.1), ARCHITECTURE_CURRENT=1.1; ArchitectureValidator pēc noklusējuma vērš v1.1 (self-check: 34 moduļi, 0 pārkāpumu; pret v1.0 tie paši moduļi dotu 7 pārkāpumus, jo composition v1.0 neeksistē - testēts). Minimālais versioned update (NEVIS pilns evolution engine): application/architecture_versioning.py ArchitectureVersioning.introduce(spec, supersedes='1.0') atomiski ievieš v1.1 (is_current=True), atzīmē v1.0 superseded_by='1.1'/is_current=False, saglabā v1.0 baseline/rules/created_at neskartus un izveido ADR-008 (composition root lēmums ar Step 9 provenance); idempotents (otrs izsaukums = already-present, 0 jaunu audita ierakstu), konflikti (divi current, pazudis/nesakrītošs priekštecis, atšķirīgs ADR-008, atšķirīga versija) met ArchitectureVersioningConflictError un rollbacko VISU transakciju. (3) Ports: WorkerChannelPort (NE AsyncWorkerPort - nav asyncio) ar dispatch(request)/read_report(step_no, attempt)/acknowledge_report(step_no, attempt); ClineWorkerAdapter to izpilda strukturāli bez izmaiņām, WorkerPort.run() paliek synchronous convenience; Orchestrator validē WorkerChannelPort un nav atkarīgs no ClineWorkerAdapter (testi lieto in-memory faku). (4) Orchestrator(storage, worker, context_builder, *, clock, timeout, instructions, report_schema): context_builder ir obligāta injekcija, dispatch laikā context nāk TIKAI no ContextBuilder.build(step_no) (CountingContextBuilder tests pierāda izsaukumu un request.context saturu). (5) Event-driven loop: run_once() izpilda TIEŠI VIENU FSM pāreju pēc persistētā step.state (restart recovery ir dizaina īpašība, nevis papildu kods); katra pāreja = 1 DB transakcija (step + subordinate Task + tieši 1 audits AuditEntityType.STEP ar event/from/to/attempt/reason); rollback testēts (kļūda auditā -> state UN attempt paliek nemainīgi). (6) ACK plūsma crash-safe: read (read-only, atkārtojams) -> persist REPORT_RECEIVED -> report NAV ack -> persist REVIEWING -> NAV ack -> deterministisks outcome -> persist -> TIKAI TAGAD acknowledge_report. Testi: restart pēc REPORT_RECEIVED, restart REVIEWING (viens VERIFIED, nevis divi), restart pēc outcome (nav reprocesa), ACK kļūme nepazaudē outcome (acknowledged=False + ack_error, stāvoklis VERIFIED). (7) Retry: REVISE/FAILED -> READY ar attempt+1 VIENĀ transakcijā; izsmelti mēģinājumi -> ABORTED (FAILED ceļš). (8) FSM atkāpe, kas jāzina: Step 1 FSM (authoritative) NEATĻAUJ REVIEWING->FAIL - no REVIEWING ir tikai VERIFY/REQUEST_REVISE/BLOCK/RAISE_CONFLICT. Tāpēc review politika ir FSM-legāla: FAILED ar atlikušiem mēģinājumiem -> REQUEST_REVISE (reason 'report-failed-retry'), izsmeltiem -> BLOCK ('failed-attempts-exhausted'); REVISE izsmeltiem -> BLOCK ('revise-attempts-exhausted'); BLOCKED -> BLOCK; DONE -> VERIFY; architecture_questions vai issues (jebkurš statuss) -> BLOCK. FAILED stāvoklis tiek sasniegts tikai dispatch/timeout ceļā (DISPATCHED/CLINE_WORKING -> FAIL) un tad darbojas kor. #6: FAILED -> READY (attempt+1) vai -> ABORTED. Tests pierāda, ka decide_review nekad neatgriež no REVIEWING nelegālu eventu. (9) Scheduler: run_until_idle() ķēdē tūlītējas pārejas un apstājas, tiklīdz nepieciešams ārējs notikums (worker report / human approval / unblock / conflict resolution / timeout deadline) vai stāvoklis COMPLETE/ABORTED/PAUSED/NO_STEPS; bez polling/sleep/thread; max_iterations ir tikai per-call drošības robeža (limit_reached=True, operators sauc vēlreiz); Scheduler.health() = read-only LoopHealth. (10) Timeout: persistētie Step timestamp lauki (last_update_at, fallback started_at), nekad minējums - ja timestamp nav, 'nespēj spriest' un cikls gaida; report tiek pārbaudīts PIRMS timeout, tāpēc laikā saņemts reports nekad netiek izmests (testēts); timeout+pāreja+audits atomiski. (11) Audit: kontrakts pārbaudīts - AuditEntityType saturēja tikai ADR/RISK, tāpēc apzināti pievienots STEP (domain change ar testiem); Action katalogs nemainīts (UPDATE + detalizēta vārdnīca). (12) Current/Next: current = mazākais required step, kas NAV VERIFIED; ABORTED/BLOCKED/CONFLICT/WAITING_APPROVAL paliek current un cikls apstājas; next_step_no() tikai informatīvs, nākamais solis nekad nekļūst aktīvs, kamēr current nav VERIFIED (testi ar soļiem 9/10); ABORTED nav VERIFIED ekvivalents; complete tikai kad VISI VERIFIED. (13) Pause/resume: cikls respektē project.paused (PAUSED, nekas netiek rakstīts); toggle paliek human-override soļa pienākums. (14) Step 8 koda izmaiņa (nepieciešama composition idempotencei): _reconcile_version tagad salīdzina baseline SATURU un nekad nepārraksta versiju vēsturi, tāpēc likumīgi superseded v1.0 (v1.1 current) vairs nav konflikts - bez tā otrs compose() uzdūrās 'version(s) 1.1 are already current'; visi 4 esošie v1.0 konfliktu testi joprojām zaļi. AdrSpec ieguva additīvu 'provenance' lauku (default RETROSPECTIVE_NOTE), lai ADR-008 lietotu savu Step 9 provenance. (15) Ārpus tvēruma apzināti NAV: Step 10 realization-control/validator cilpā, AI advisor/judge adapteri, UI/CLI. Verifikācija: python -m pytest -q -> 1079 passed, 0 failed (pirms Step 9: 895); architecture self-check pret v1.1 = 0 pārkāpumu; end-to-end tests reāli izdzen cilpu caur Cline failu kanālu (task+context ierakstīti, reports nolasīts, apstiprināts, arhivēts, solis VERIFIED)."
+}

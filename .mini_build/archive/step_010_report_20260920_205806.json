@@ -1,0 +1,31 @@
+{
+  "step_no": 10,
+  "status": "DONE",
+  "files_created": [
+    "src/architecture_assistant/application/realization_control.py",
+    "src/architecture_assistant/composition/realization.py",
+    "tests/test_realization_control.py",
+    "tests/test_realization_gate.py"
+  ],
+  "files_changed": [
+    "src/architecture_assistant/ports/capabilities.py",
+    "src/architecture_assistant/ports/__init__.py",
+    "src/architecture_assistant/application/orchestrator.py",
+    "src/architecture_assistant/application/__init__.py",
+    "src/architecture_assistant/composition/root.py",
+    "src/architecture_assistant/composition/__init__.py",
+    "tests/test_orchestrator.py",
+    "tests/test_scheduler.py",
+    "tests/test_composition.py"
+  ],
+  "files_deleted": [],
+  "tests": {
+    "passed": 1139,
+    "failed": 0,
+    "command": "python -m pytest -q"
+  },
+  "dependencies_added": [],
+  "architecture_questions": [],
+  "issues": [],
+  "summary": "Step 10 (Architecture Realization Control) implementēts ar visām 10 korekcijām. (1) OBLIGĀTS dependency: Orchestrator(..., realization_control=...) ir required keyword-only bez default; izlaists -> TypeError, None/object bez gate -> ValueError; tests lieto FakeRealizationControl (test_orchestrator/test_scheduler) un CountingGate (gate testi); compose() VIENMĒR injicē gate, CompositionConfig nav nekāda enable/disable slēdža, un tests pārbauda, ka parametram nav default (fail-closed: cilpu nevar uzbūvēt bez architecture gate). (2) Gate identitātē ir step_no UN attempt: decision id = realization-step-010-attempt-002, finding id = finding-010-002-<content-hash> (sha1 par rule_id|module|target); retry nepārraksta iepriekšējo verdictu - testi gan use-case, gan loop līmenī (attempt 1 REJECTED + findings paliek, attempt 2 ACCEPTED). (3) Domain modeļi NETIKA mainīti: Finding/Decision jau saturēja step_no no Step 1, tāpēc nekas netika pievienots; attempt konteksts kodēts stable ID, Decision rationale, evidence un RealizationGate DTO; tests fiksē precīzu Finding/Decision lauku kopu, tāpēc klusa paplašināšana izgāztos. (4) Pirms source validation VIENMĒR tiek pārbaudīta AUTHORITATIVE baseline: Storage ArchitectureVersion (tieši viena current) -> salīdzinājums ar injicēto CanonicalBaseline(version, rule_ids) -> tikai tad scan + ArchitectureValidator; 0 current, >1 current, neatbilstoša versija, neatbilstoši rule IDs vai cita baseline adapterī -> RealizationControlError (fail-closed: verdict nav, VERIFY aizliegts, report NETIEK ACK); adaptera baseline_version tiek krusteniski pārbaudīts pret persistēto. (5) source_root ir obligāti injectable bez default (inspect.signature tests); composition to dod (src/architecture_assistant = pats asistents), adaptera modulī nav neviena hardcoded ceļa; core/use-case par ceļiem nezina vispār (tas ir aiz RealizationCheckPort), tāpēc vēlāk var kontrolēt citus PY/JSX projektus. (6) Findings/Decisions tiek persistēti tikai kā derived evidence: katrs gate() veic svaigu validāciju; vecs ACCEPTED Decision nekad neaizvieto jaunu validator skrējienu (tests: iepriekš saglabāts ACCEPTED + violating koks -> gate joprojām non-compliant, port tiek prasīts no jauna, saglabātais ieraksts tiek pārrakstīts uz REJECTED). (7) Violation iznākums: DONE reports + 0 report issues + architecture violation => BLOCKED (reason 'architecture-violation'); ACK notiek TIKAI pēc tam, kad findings/decision, Step state BLOCKED un audit transition ir NOTURĪGI - gate verdict, evidence un pāreja ir VIENA transakcija (gate skrien orchestratora transakcijā; iekšējā transakcija pievienojas ārējai), un ACK ir aiz tās. Ja gate vai persistence krīt (failing gate, ExplodingAudit, RealizationControlError), izņēmums propagējas, report NETIEK ACK, step paliek REVIEWING un transakcija rollbackojas (evidence arī). (8) Ja attempt 1 ir violation un attempt 2 to salabo: loop testā attempt 1 -> BLOCKED, cilvēks atbloķē (READY/attempt 2), fresh scan 0 violations -> VERIFIED; abi ieraksti (realization-step-010-attempt-001 REJECTED, ...-002 ACCEPTED) un attempt 1 findings paliek vēsturē. (9) DecisionStatus un Severity lieto tikai ESOŠĀS enum vērtības (ACCEPTED/REJECTED; Severity nāk no pārkāptā rule, tai skaitā CRITICAL); neviens jauns enum members netika ieviests (tests). (10) Testi papildus: Orchestrator nevar tikt uzbūvēts bez gate (+ compose pārbaudes); attempt 1 violation + attempt 2 compliant saglabā abus; persisted ArchitectureVersion mismatch -> RealizationControlError un VERIFY aizliegts; >1 current -> fail closed; gate exception -> report nav ACK; persistence exception -> report nav ACK un evidence aizvākts; source_root injectable (+ nav default); Finding/Decision modeļi nav paplašināti; vecs ACCEPTED realization Decision neizlaiž svaigu scan. Arhitektūra un tvērums: nav OpenAI/Claude/Grok adapteru (AdvisorPort/JudgePort paliek nepievienoti, Decision perspectives vienmēr tukšas - deterministic rules ir vienīgais gates input, un violation nevar tikt pārbalsots), nav UI, monitor/reporting paliek derived (nav source of truth), nav god-service (šaurs RealizationControlUseCase ar vienu gate() metodi + plāns ArchitectureRealizationAdapter; loop politika paliek loop_policy/orchestrator). Slāņi: ports -> domain, application -> domain+ports, adapteris (kas importē architecture) dzīvo composition; ARCHITECTURE_QUESTION NAV vajadzīga - matrica/baseline/domain nav mainīti. Verifikācija: python -m pytest -q -> 1139 passed, 0 failed (pirms Step 10: 1079); architecture self-check pret v1.1: 36 moduļi, 0 pārkāpumu; end-to-end tests reāli izdzen cilpu caur Cline failu kanālu līdz VERIFIED ar reālo gate un pierāda, ka injicēts violating koks noved pie BLOCKED."
+}

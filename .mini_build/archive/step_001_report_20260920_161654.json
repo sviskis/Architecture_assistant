@@ -1,0 +1,26 @@
+{
+  "step_no": 1,
+  "status": "DONE",
+  "files_created": [
+    "pyproject.toml",
+    "src/architecture_assistant/__init__.py",
+    "src/architecture_assistant/domain/__init__.py",
+    "src/architecture_assistant/domain/enums.py",
+    "src/architecture_assistant/domain/models.py",
+    "src/architecture_assistant/domain/fsm.py",
+    "tests/__init__.py",
+    "tests/test_models.py",
+    "tests/test_fsm.py"
+  ],
+  "files_changed": [],
+  "files_deleted": [],
+  "tests": {
+    "passed": 364,
+    "failed": 0,
+    "command": "python -m pytest -q"
+  },
+  "dependencies_added": [],
+  "architecture_questions": [],
+  "issues": [],
+  "summary": "Step 1 (FOUNDATION) pabeigts. Izveidoti 8 dependency-free frozen dataclass modeļi (Project, Step, Task, ArchitectureVersion, ADR, Risk, Finding, Decision) ar __post_init__ validāciju un deterministisku to_dict/from_dict serializāciju (enum -> value, datetime -> ISO 8601, tuple -> list). Izveidots deterministisks transition-table FSM: StepStateMachine ar 27 atļautajām pārejām, kas 1:1 atbilst apstiprinātajam master workflow (PENDING/READY/WAITING_APPROVAL/DISPATCHED/CLINE_WORKING/REPORT_RECEIVED/REVIEWING/REVISE/BLOCKED/CONFLICT/FAILED/VERIFIED/ABORTED), VERIFIED un ABORTED ir terminālie stāvokļi, REVISE->READY un FAILED->READY retry, WAITING_APPROVAL plūsma (APPROVE/REJECT/BLOCK/ABORT). Task ir minimāls un pakārtots Cline dispatch marķieris (CREATED/DISPATCHED/REPORTED/FAILED, 3 pārejas), kas nekad nedzen Step pārejas. Project.current_step_no vairs nav otrs source of truth: lauks ir current_step_no_snapshot ar non-authoritative dokumentāciju. Mode enum: MANUAL/SUPERVISED/AUTO. Testi sedz katru atļauto pāreju, katru aizliegto pāreju (193), VERIFIED/ABORTED terminālumu, retry, WAITING_APPROVAL plūsmu un determinismu, kā arī modeļu validāciju, immutability un round-trip. Scope ievērots: nav SQLite, API, UI vai plugin implementāciju."
+}
