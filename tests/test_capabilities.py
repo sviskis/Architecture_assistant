@@ -14,6 +14,8 @@ from architecture_assistant.domain.models import Decision, Finding, Task
 from architecture_assistant.ports import (
     AdvisorPort,
     AdvisorQuery,
+    CostIdentityConflictError,
+    CostIdentityUnavailableError,
     CostPort,
     CostQuery,
     CostRecord,
@@ -202,59 +204,91 @@ class TestJudgeConflict:
 
 class TestCostRecord:
     def test_defaults(self) -> None:
-        record = CostRecord(provider="openai")
+        record = CostRecord(event_id="evt-1", provider="openai")
+        assert record.event_id == "evt-1"
         assert record.model == ""
         assert record.input_tokens == 0
         assert record.output_tokens == 0
         assert record.cost_usd == 0.0
+        # unknown unless explicitly priced - never assumed to be free
+        assert record.pricing_known is False
         assert record.project is None
         assert record.step_no is None
         assert isinstance(record.created_at, datetime)
 
     def test_full_record(self) -> None:
         record = CostRecord(
+            event_id="openai:chatcmpl-abc",
             provider="claude",
             model="opus",
             input_tokens=100,
             output_tokens=50,
             cost_usd=1.25,
+            pricing_known=True,
             project="Architecture Lifecycle Assistant",
             step_no=6,
             created_at=NOW,
         )
+        assert record.event_id == "openai:chatcmpl-abc"
         assert record.cost_usd == 1.25
+        assert record.pricing_known is True
         assert record.step_no == 6
         assert record.created_at == NOW
 
     def test_empty_provider_is_rejected(self) -> None:
         with pytest.raises(ValueError, match="provider must be a non-empty"):
-            CostRecord(provider="")
+            CostRecord(event_id="evt-1", provider="")
 
     def test_negative_token_counts_are_rejected(self) -> None:
         with pytest.raises(ValueError, match="input_tokens must be >= 0"):
-            CostRecord(provider="p", input_tokens=-1)
+            CostRecord(event_id="evt-1", provider="p", input_tokens=-1)
         with pytest.raises(ValueError, match="output_tokens must be >= 0"):
-            CostRecord(provider="p", output_tokens=-1)
+            CostRecord(event_id="evt-1", provider="p", output_tokens=-1)
 
     def test_negative_cost_is_rejected(self) -> None:
         with pytest.raises(ValueError, match="cost_usd must be >= 0"):
-            CostRecord(provider="p", cost_usd=-0.01)
+            CostRecord(event_id="evt-1", provider="p", cost_usd=-0.01)
 
     def test_non_positive_step_no_is_rejected(self) -> None:
         with pytest.raises(ValueError, match="step_no must be >= 1"):
-            CostRecord(provider="p", step_no=0)
+            CostRecord(event_id="evt-1", provider="p", step_no=0)
+
+    def test_empty_event_id_is_rejected(self) -> None:
+        """Without a stable identity there is no idempotent cost event."""
+        with pytest.raises(ValueError, match="event_id must be a non-empty"):
+            CostRecord(event_id="", provider="p")
+        with pytest.raises(ValueError, match="event_id must be a non-empty"):
+            CostRecord(event_id="   ", provider="p")
+
+    def test_non_bool_pricing_known_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="pricing_known must be a bool"):
+            CostRecord(event_id="evt-1", provider="p", pricing_known=1)
+
+    def test_an_unknown_price_is_not_the_same_as_a_real_zero_price(self) -> None:
+        """Both carry 0.0 - only ``pricing_known`` tells them apart."""
+        unpriced = CostRecord(event_id="evt-1", provider="p", cost_usd=0.0)
+        priced_zero = CostRecord(
+            event_id="evt-2", provider="p", cost_usd=0.0, pricing_known=True
+        )
+
+        assert unpriced.cost_usd == priced_zero.cost_usd == 0.0
+        assert unpriced.pricing_known is False
+        assert priced_zero.pricing_known is True
+        assert unpriced != priced_zero
 
     def test_to_dict_is_json_safe_and_deterministic(self) -> None:
-        payload = CostRecord(provider="p", step_no=6, created_at=NOW).to_dict()
+        payload = CostRecord(event_id="evt-1", provider="p", step_no=6, created_at=NOW).to_dict()
         assert json.loads(json.dumps(payload)) == payload
         assert payload["created_at"] == NOW.isoformat()
-        assert payload == CostRecord(provider="p", step_no=6, created_at=NOW).to_dict()
+        assert payload["event_id"] == "evt-1"
+        assert payload["pricing_known"] is False
+        assert payload == CostRecord(event_id="evt-1", provider="p", step_no=6, created_at=NOW).to_dict()
 
 
 
 class TestCostQuery:
     def test_empty_query_matches_everything(self) -> None:
-        assert CostQuery().matches(CostRecord(provider="any")) is True
+        assert CostQuery().matches(CostRecord(event_id="evt-1", provider="any")) is True
 
     def test_from_time_after_to_time_is_rejected(self) -> None:
         with pytest.raises(ValueError, match="must be <= to_time"):
@@ -262,31 +296,31 @@ class TestCostQuery:
 
     def test_filters_by_project(self) -> None:
         query = CostQuery(project="A")
-        assert query.matches(CostRecord(provider="p", project="A")) is True
-        assert query.matches(CostRecord(provider="p", project="B")) is False
-        assert query.matches(CostRecord(provider="p")) is False
+        assert query.matches(CostRecord(event_id="evt-1", provider="p", project="A")) is True
+        assert query.matches(CostRecord(event_id="evt-1", provider="p", project="B")) is False
+        assert query.matches(CostRecord(event_id="evt-1", provider="p")) is False
 
     def test_filters_by_step(self) -> None:
         query = CostQuery(step_no=6)
-        assert query.matches(CostRecord(provider="p", step_no=6)) is True
-        assert query.matches(CostRecord(provider="p", step_no=7)) is False
-        assert query.matches(CostRecord(provider="p")) is False
+        assert query.matches(CostRecord(event_id="evt-1", provider="p", step_no=6)) is True
+        assert query.matches(CostRecord(event_id="evt-1", provider="p", step_no=7)) is False
+        assert query.matches(CostRecord(event_id="evt-1", provider="p")) is False
 
     def test_filters_by_provider(self) -> None:
         query = CostQuery(provider="openai")
-        assert query.matches(CostRecord(provider="openai")) is True
-        assert query.matches(CostRecord(provider="claude")) is False
+        assert query.matches(CostRecord(event_id="evt-1", provider="openai")) is True
+        assert query.matches(CostRecord(event_id="evt-1", provider="claude")) is False
 
     def test_filters_by_time_window(self) -> None:
         query = CostQuery(from_time=NOW, to_time=LATER)
         earlier = CostRecord(
-            provider="p", created_at=datetime(2026, 9, 20, 19, 0, tzinfo=timezone.utc)
+            event_id="evt-1", provider="p", created_at=datetime(2026, 9, 20, 19, 0, tzinfo=timezone.utc)
         )
         later = CostRecord(
-            provider="p", created_at=datetime(2026, 9, 20, 22, 0, tzinfo=timezone.utc)
+            event_id="evt-1", provider="p", created_at=datetime(2026, 9, 20, 22, 0, tzinfo=timezone.utc)
         )
-        assert query.matches(CostRecord(provider="p", created_at=NOW)) is True
-        assert query.matches(CostRecord(provider="p", created_at=LATER)) is True
+        assert query.matches(CostRecord(event_id="evt-1", provider="p", created_at=NOW)) is True
+        assert query.matches(CostRecord(event_id="evt-1", provider="p", created_at=LATER)) is True
         assert query.matches(earlier) is False
         assert query.matches(later) is False
 
@@ -299,10 +333,10 @@ class TestCostQuery:
             to_time=LATER,
         )
         matching = CostRecord(
-            provider="openai", project="A", step_no=6, created_at=NOW
+            event_id="evt-1", provider="openai", project="A", step_no=6, created_at=NOW
         )
         wrong_step = CostRecord(
-            provider="openai", project="A", step_no=7, created_at=NOW
+            event_id="evt-1", provider="openai", project="A", step_no=7, created_at=NOW
         )
         assert query.matches(matching) is True
         assert query.matches(wrong_step) is False
@@ -329,6 +363,8 @@ class TestCostSummary:
         assert summary.input_tokens == 0
         assert summary.output_tokens == 0
         assert summary.record_count == 0
+        assert summary.priced_record_count == 0
+        assert summary.unpriced_record_count == 0
 
     def test_negative_total_is_rejected(self) -> None:
         with pytest.raises(ValueError, match="total_usd must be >= 0"):
@@ -338,13 +374,77 @@ class TestCostSummary:
         with pytest.raises(ValueError, match="record_count must be >= 0"):
             CostSummary(record_count=-1)
 
+    def test_negative_priced_counts_are_rejected(self) -> None:
+        with pytest.raises(
+            ValueError, match="priced_record_count must be >= 0"
+        ):
+            CostSummary(priced_record_count=-1)
+        with pytest.raises(
+            ValueError, match="unpriced_record_count must be >= 0"
+        ):
+            CostSummary(unpriced_record_count=-1)
+
+    def test_the_priced_counts_must_partition_the_records(self) -> None:
+        """Every record is either priced or unpriced - never neither."""
+        with pytest.raises(
+            ValueError, match="must equal record_count"
+        ):
+            CostSummary(record_count=2, priced_record_count=1)
+
+    def test_an_unpriced_record_is_not_reported_as_a_known_zero_cost(
+        self,
+    ) -> None:
+        priced = CostSummary(
+            total_usd=1.5,
+            input_tokens=10,
+            output_tokens=5,
+            record_count=1,
+            priced_record_count=1,
+        )
+        unpriced = CostSummary(
+            input_tokens=10,
+            output_tokens=5,
+            record_count=1,
+            unpriced_record_count=1,
+        )
+
+        assert priced.total_usd == 1.5
+        assert unpriced.total_usd == 0.0
+        # the figures are equal-looking, so the contract must say why
+        assert unpriced.priced_record_count == 0
+        assert unpriced.unpriced_record_count == 1
+        assert unpriced.to_dict()["unpriced_record_count"] == 1
+
     def test_to_dict_is_json_safe_and_deterministic(self) -> None:
         summary = CostSummary(
-            total_usd=1.5, input_tokens=10, output_tokens=5, record_count=2
+            total_usd=1.5,
+            input_tokens=10,
+            output_tokens=5,
+            record_count=2,
+            priced_record_count=1,
+            unpriced_record_count=1,
         )
         payload = summary.to_dict()
         assert json.loads(json.dumps(payload)) == payload
         assert payload == summary.to_dict()
+        assert payload["priced_record_count"] == 1
+        assert payload["unpriced_record_count"] == 1
+
+
+class TestCostIdentityErrors:
+    """The two cost-accounting failures are part of the provider-neutral port."""
+
+    def test_the_conflict_error_is_a_plain_exception(self) -> None:
+        assert issubclass(CostIdentityConflictError, Exception)
+
+    def test_the_unavailable_identity_error_is_a_plain_exception(self) -> None:
+        assert issubclass(CostIdentityUnavailableError, Exception)
+
+    def test_the_two_errors_are_distinct(self) -> None:
+        assert CostIdentityConflictError is not CostIdentityUnavailableError
+        assert not issubclass(
+            CostIdentityConflictError, CostIdentityUnavailableError
+        )
 
 
 class TestNotification:

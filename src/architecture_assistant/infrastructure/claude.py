@@ -1,43 +1,50 @@
-"""OpenAI advisor adapter - the "Implementation Analyst" of :class:`AdvisorPort`.
+"""Claude advisor adapter - the "Critical Reviewer / Risk Analyst" of the port.
 
-The assistant is *deterministic first*: the architecture validator, the
-realization gate, the step FSM and the review policy decide everything that can
-be decided from code and persisted state. This adapter adds a **consultative**
-capability on top of that - it answers the question *"HOW to realize this?"* with
-a structured, evidence-based :class:`~architecture_assistant.domain.models.Finding`
-and nothing else.
+The OpenAI adapter (Step 12) is the *Implementation Analyst*: it answers *"HOW
+to realize this?"*. This adapter is the second, independent perspective - the
+**Critical Reviewer / Risk Analyst** - and it answers a different question:
 
-It deliberately cannot do more than that:
+    **"WHAT can break, what is weak, what assumptions are risky?"**
 
-* it is **never** wired into ``decide_review``, the realization gate or the
-  architecture validator, so a model answer can never override a deterministic
-  rule, a persisted baseline or a gate verdict;
+Both perspectives are *consultative* and neither can decide anything:
+
+* this adapter is **never** wired into ``decide_review``, the realization gate,
+  the orchestrator or the architecture validator, so a model answer can never
+  override a deterministic rule, a persisted baseline or a gate verdict;
 * it returns a :class:`Finding <architecture_assistant.domain.models.Finding>` -
   never a :class:`Decision <architecture_assistant.domain.models.Decision>`, a
-  version, a rule change or an ADR. Judging conflicts is a later, separate step;
+  version, a rule change or an ADR. There is no judge, no majority vote and no
+  decision engine here: deterministic architecture rules outrank every advisor;
 * it must **fail closed**. A timeout, a broken HTTP status, a malformed model
-  answer or an explicit abstention raises a specific error - the adapter never
-  invents a finding to keep the loop moving.
+  answer or an explicit abstention raises a specific error - it never invents a
+  risk to keep the loop moving.
 
-Only two provider-specific facts live here: the OpenAI chat-completions wire
-format and the ``OPENAI_API_KEY`` environment variable. Nothing the rest of the
-system sees is provider-shaped.
+The role is adapter metadata (the system-prompt persona), not a domain concept:
+the finding carries ``source="claude"`` and the domain model is unchanged.
 
-The provider-neutral machinery this adapter needs - the HTTP request/response
-DTOs, the ``urllib`` transport, the neutral transport error, the retry
-classification, secret redaction, the primitive validators, the deterministic
-finding-id helper and the price model - lives in the private ``._http`` module
-and is shared with the other provider adapters (Claude, and later Grok). It is
-re-imported here unchanged, so this module's public surface is exactly what it
-was before the extraction.
+Wire format
+-----------
+Provider-specific facts live here and nowhere else: the Anthropic Messages
+request/response shape (``system`` + ``messages`` in, ``content[0].text`` and
+``usage.input_tokens``/``usage.output_tokens`` out), the ``x-api-key`` header
+with ``anthropic-version``, and the ``ANTHROPIC_API_KEY`` environment variable.
+
+Everything mechanical is shared with the other provider adapters through the
+private ``._http`` module (HTTP DTOs, ``urllib`` transport, transport error,
+retry classification, redaction, primitive validators, the deterministic
+finding-id helper and the price model). Retry, abstain, cost and evidence
+semantics are identical to the OpenAI adapter by design.
+
+Model selection is *configuration, never architecture truth*: see
+:func:`resolve_claude_model` for the documented resolution order.
 
 Security / secrets
 ------------------
-The API key is **never** hardcoded, never a default value, never stored on the
-instance, never part of the request body, never in ``repr`` and never in an error
-message: it travels only in the ``Authorization`` header (or in the injected
-``api_key`` argument). Response and exception text is redacted before it is
-embedded in an error, so even a pathological provider echo cannot leak it.
+The API key is **never** hardcoded, never a default, never stored beyond
+construction, never in the request body, never in the ``Finding``, never in a
+``CostRecord``, never in ``repr`` and never in an error message: it travels only
+in the ``x-api-key`` header. Response and exception text is redacted before it
+is embedded in an error, so even a pathological provider echo cannot leak it.
 
 Determinism
 -----------
@@ -81,134 +88,156 @@ from ._http import (
 )
 
 __all__ = [
-    "OPENAI_PROVIDER",
-    "DEFAULT_OPENAI_MODEL",
-    "IMPLEMENTATION_ANALYST_ROLE",
-    "OPENAI_CHAT_COMPLETIONS_URL",
-    "OPENAI_API_KEY_ENV_VAR",
-    "DEFAULT_TIMEOUT_SECONDS",
-    "DEFAULT_MAX_RETRIES",
-    "DEFAULT_BACKOFF_SCHEDULE",
-    "DEFAULT_MAX_OUTPUT_TOKENS",
-    "ABSTAIN_REASON_FALLBACK",
-    "CONTRACT_STATUS_OK",
-    "CONTRACT_STATUS_ABSTAIN",
-    "UNKNOWN_PRICE",
-    "ModelPrice",
-    "HttpRequest",
-    "HttpResponse",
-    "HttpTransportError",
-    "OpenAIAdvisorError",
-    "MissingApiKeyError",
-    "OpenAIAdvisorTransportError",
-    "OpenAIAdvisorTimeoutError",
-    "OpenAIAdvisorRateLimitError",
-    "OpenAIAdvisorHttpError",
-    "OpenAIAdvisorInvalidResponseError",
-    "OpenAIAdvisorAbstainError",
-    "OpenAIAdvisorAdapter",
+    "CLAUDE_PROVIDER",
+    "DEFAULT_CLAUDE_MODEL",
+    "CLAUDE_MODEL_ENV_VAR",
+    "CRITICAL_REVIEWER_ROLE",
+    "CLAUDE_MESSAGES_URL",
+    "CLAUDE_API_KEY_ENV_VAR",
+    "CLAUDE_API_VERSION",
+    "DEFAULT_CLAUDE_MAX_OUTPUT_TOKENS",
+    "resolve_claude_model",
+    "ClaudeAdvisorError",
+    "ClaudeMissingApiKeyError",
+    "ClaudeAdvisorTransportError",
+    "ClaudeAdvisorTimeoutError",
+    "ClaudeAdvisorRateLimitError",
+    "ClaudeAdvisorHttpError",
+    "ClaudeAdvisorInvalidResponseError",
+    "ClaudeAdvisorAbstainError",
+    "ClaudeAdvisorAdapter",
 ]
 
 #: The provider id stored in ``Finding.source`` and ``CostRecord.provider``.
-OPENAI_PROVIDER = "openai"
+CLAUDE_PROVIDER = "claude"
 
-#: The single advisor role of this step. The role is *adapter metadata* (the
-#: persona of the system prompt), not a domain concept: the domain contract of a
-#: finding carries ``source``, and a second OpenAI role would be a second adapter.
-IMPLEMENTATION_ANALYST_ROLE = "Implementation Analyst"
+#: The single documented adapter default - used only when neither the
+#: constructor nor the environment names a model.
+DEFAULT_CLAUDE_MODEL = "claude-3-5-haiku-latest"
 
-#: Chat-completions endpoint - the only OpenAI URL this codebase knows.
-OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
+#: Optional environment variable naming the model (configuration, not a rule).
+CLAUDE_MODEL_ENV_VAR = "CLAUDE_MODEL"
+
+#: The advisor persona: a risk/weakness reviewer, not an implementation analyst.
+CRITICAL_REVIEWER_ROLE = "Critical Reviewer / Risk Analyst"
+
+#: Anthropic Messages endpoint.
+CLAUDE_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 
 #: The environment variable the key is read from when none is injected.
-OPENAI_API_KEY_ENV_VAR = "OPENAI_API_KEY"
+CLAUDE_API_KEY_ENV_VAR = "ANTHROPIC_API_KEY"
 
-#: Model asked for the implementation analysis. A *default*, injected by the
-#: composition root - never a statement about price or availability.
-DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
+#: Required ``anthropic-version`` header value (the documented API version).
+CLAUDE_API_VERSION = "2023-06-01"
 
-#: OpenAI's own output budget for one analysis (request shaping, not shared).
-DEFAULT_MAX_OUTPUT_TOKENS = 1024
+#: Claude Messages requires ``max_tokens``; this is the adapter's own budget.
+DEFAULT_CLAUDE_MAX_OUTPUT_TOKENS = 1024
 
 #: Used when the model abstains without putting anything in ``reason``.
-ABSTAIN_REASON_FALLBACK = "the model abstained without stating a reason"
+_ABSTAIN_REASON_FALLBACK = "the model abstained without stating a reason"
 
-CONTRACT_STATUS_OK = "OK"
-CONTRACT_STATUS_ABSTAIN = "ABSTAIN"
-
-
-class OpenAIAdvisorError(Exception):
-    """Base class for every OpenAI advisor failure."""
+_CONTRACT_STATUS_OK = "OK"
+_CONTRACT_STATUS_ABSTAIN = "ABSTAIN"
 
 
-class MissingApiKeyError(OpenAIAdvisorError):
+def resolve_claude_model(model: Optional[str] = None) -> str:
+    """Resolve the Claude model through one documented order.
+
+    A provider model name is **configuration, never architecture truth**, so it
+    is never hardcoded into a rule or a contract:
+
+    1. the explicit ``model`` argument (constructor / composition config), when
+       non-blank;
+    2. the optional :data:`CLAUDE_MODEL_ENV_VAR` environment variable, when
+       non-blank;
+    3. :data:`DEFAULT_CLAUDE_MODEL` - the one documented adapter default.
+
+    Nothing here checks that the model exists. The assistant must compose and run
+    fully offline, so an unknown or retired model name is a provider-side failure
+    later, never a start-up failure now.
+    """
+    if model is not None and str(model).strip():
+        return str(model).strip()
+    from_env = os.environ.get(CLAUDE_MODEL_ENV_VAR, "")
+    if from_env.strip():
+        return from_env.strip()
+    return DEFAULT_CLAUDE_MODEL
+
+
+class ClaudeAdvisorError(Exception):
+    """Base class for every Claude advisor failure."""
+
+
+class ClaudeMissingApiKeyError(ClaudeAdvisorError):
     """Raised when neither the argument nor the environment provides a key."""
 
 
-class OpenAIAdvisorTransportError(OpenAIAdvisorError):
+class ClaudeAdvisorTransportError(ClaudeAdvisorError):
     """The request could not be delivered (retries used up)."""
 
 
-class OpenAIAdvisorTimeoutError(OpenAIAdvisorTransportError):
+class ClaudeAdvisorTimeoutError(ClaudeAdvisorTransportError):
     """The request timed out (retries used up)."""
 
 
-class OpenAIAdvisorRateLimitError(OpenAIAdvisorError):
+class ClaudeAdvisorRateLimitError(ClaudeAdvisorError):
     """HTTP 429 (retries used up)."""
 
 
-class OpenAIAdvisorHttpError(OpenAIAdvisorError):
+class ClaudeAdvisorHttpError(ClaudeAdvisorError):
     """A non-retryable status - or a retryable one that never recovered."""
 
 
-class OpenAIAdvisorInvalidResponseError(OpenAIAdvisorError):
+class ClaudeAdvisorInvalidResponseError(ClaudeAdvisorError):
     """The answer violated the structured output contract.
 
-    This is **not** an abstention: an abstention is the model saying so. A broken
-    contract is a defect and must be told apart from a deliberate refusal.
+    This is the *defect* path: the model returned something that is not the
+    agreed json object, or an ``OK`` answer without the claim/evidence the
+    contract requires. It is deliberately distinct from
+    :class:`ClaudeAdvisorAbstainError` - a broken contract must never be
+    reported as a deliberate refusal.
     """
 
 
-class OpenAIAdvisorAbstainError(OpenAIAdvisorError):
-    """The model explicitly abstained or refused to answer."""
+class ClaudeAdvisorAbstainError(ClaudeAdvisorError):
+    """The model explicitly abstained or refused to answer.
+
+    A legitimate outcome, not a defect: the surrounding system decides what an
+    abstention means; the adapter only reports it faithfully, with the model's
+    own reason (or a documented fallback when it gave none).
+    """
 
     def __init__(self, reason: str) -> None:
         text = (
-            reason
+            reason.strip()
             if isinstance(reason, str) and reason.strip()
-            else ABSTAIN_REASON_FALLBACK
+            else _ABSTAIN_REASON_FALLBACK
         )
-        super().__init__(f"advisor abstained: {text}")
+        super().__init__(f"Claude advisor abstained: {text}")
         self.reason = text
 
 
-# ---------------------------------------------------------------------------
-# Provider-neutral transport, price model and primitive validators are shared
-# through ``._http`` (see that module's docstring for the exact boundary): they
-# are re-imported here so the Step 12 public surface stays backwards compatible,
-# while everything OpenAI-specific stays in this module.
-# ---------------------------------------------------------------------------
-
-
-class OpenAIAdvisorAdapter:
-    """OpenAI implementation of :class:`AdvisorPort` (Implementation Analyst).
+class ClaudeAdvisorAdapter:
+    """Claude implementation of the advisor port (Critical Reviewer).
 
     The adapter is *only* a capability: constructing it opens no connection, reads
     no key and changes no state, so the composition root may always build it and a
-    project without ``OPENAI_API_KEY`` simply never calls :meth:`advise`.
+    project without ``ANTHROPIC_API_KEY`` simply never calls :meth:`advise`. The
+    deterministic gate is entirely unaffected either way.
     """
 
     def __init__(
         self,
         api_key: Optional[str] = None,
         *,
-        url: str = OPENAI_CHAT_COMPLETIONS_URL,
-        model: str = DEFAULT_OPENAI_MODEL,
-        role: str = IMPLEMENTATION_ANALYST_ROLE,
+        url: str = CLAUDE_MESSAGES_URL,
+        model: Optional[str] = None,
+        role: str = CRITICAL_REVIEWER_ROLE,
+        api_version: str = CLAUDE_API_VERSION,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         max_retries: int = DEFAULT_MAX_RETRIES,
         backoff_schedule: Sequence[float] = DEFAULT_BACKOFF_SCHEDULE,
-        max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
+        max_output_tokens: int = DEFAULT_CLAUDE_MAX_OUTPUT_TOKENS,
         transport: Optional[Callable[[HttpRequest], HttpResponse]] = None,
         cost_sink: Optional[CostPort] = None,
         pricing: Optional[Mapping[str, ModelPrice]] = None,
@@ -224,8 +253,10 @@ class OpenAIAdvisorAdapter:
             api_key if isinstance(api_key, str) and api_key.strip() else None
         )
         self._url = _require_text(url, "url")
-        self._model = _require_text(model, "model")
+        # config -> environment -> documented default; never architecture truth
+        self._model = _require_text(resolve_claude_model(model), "model")
         self._role = _require_text(role, "role")
+        self._api_version = _require_text(api_version, "api_version")
         self._timeout = _require_number(
             timeout_seconds, "timeout_seconds", minimum=1e-6
         )
@@ -278,17 +309,22 @@ class OpenAIAdvisorAdapter:
     @property
     def provider(self) -> str:
         """The provider id this adapter reports as ``Finding.source``."""
-        return OPENAI_PROVIDER
+        return CLAUDE_PROVIDER
 
     @property
     def model(self) -> str:
-        """The model asked for the analysis."""
+        """The resolved model asked for the review."""
         return self._model
 
     @property
     def role(self) -> str:
         """The advisor persona - adapter metadata, not a domain field."""
         return self._role
+
+    @property
+    def api_version(self) -> str:
+        """The ``anthropic-version`` header value this adapter sends."""
+        return self._api_version
 
     @property
     def is_configured(self) -> bool:
@@ -299,7 +335,7 @@ class OpenAIAdvisorAdapter:
         The key itself is never stored beyond construction and never returned.
         """
         return bool(self._api_key) or bool(
-            os.environ.get(OPENAI_API_KEY_ENV_VAR, "").strip()
+            os.environ.get(CLAUDE_API_KEY_ENV_VAR, "").strip()
         )
 
     @property
@@ -315,14 +351,14 @@ class OpenAIAdvisorAdapter:
     def __repr__(self) -> str:
         """Deliberately key-free - the API key must never be rendered."""
         return (
-            f"{type(self).__name__}(provider={OPENAI_PROVIDER!r}, "
+            f"{type(self).__name__}(provider={CLAUDE_PROVIDER!r}, "
             f"model={self._model!r}, role={self._role!r}, "
             f"configured={self.is_configured})"
         )
 
     # -- AdvisorPort -------------------------------------------------------
     def advise(self, query: AdvisorQuery) -> Finding:
-        """Answer one implementation question with an evidence-based finding.
+        """Answer one review question with an evidence-based finding.
 
         Raises instead of guessing: a missing key, an unrecoverable transport or
         status failure, a broken output contract, or an explicit abstention each
@@ -348,30 +384,31 @@ class OpenAIAdvisorAdapter:
         """The key for this call: argument first, environment second."""
         if self._api_key:
             return self._api_key
-        from_env = os.environ.get(OPENAI_API_KEY_ENV_VAR, "")
+        from_env = os.environ.get(CLAUDE_API_KEY_ENV_VAR, "")
         if from_env.strip():
             return from_env
-        raise MissingApiKeyError(
-            "no OpenAI API key available: pass api_key=... or set the "
-            f"{OPENAI_API_KEY_ENV_VAR} environment variable"
+        raise ClaudeMissingApiKeyError(
+            "no Claude API key available: pass api_key=... or set the "
+            f"{CLAUDE_API_KEY_ENV_VAR} environment variable"
         )
 
     # -- request -----------------------------------------------------------
     def _build_payload(self, query: AdvisorQuery) -> bytes:
         """The exact request body - serialized once, reused for every attempt.
 
-        Canonical JSON (sorted keys, compact separators) keeps the bytes stable,
-        which is what makes an identical retry payload testable.
+        The Anthropic Messages shape: ``system`` is a top-level field (not a
+        message) and ``max_tokens`` is required. Canonical JSON (sorted keys,
+        compact separators) keeps the bytes stable, which is what makes an
+        identical retry payload testable.
         """
         body = {
             "model": self._model,
+            "system": self._system_prompt(),
             "messages": [
-                {"role": "system", "content": self._system_prompt()},
                 {"role": "user", "content": self._user_prompt(query)},
             ],
             "temperature": 0,
             "max_tokens": self._max_output_tokens,
-            "response_format": {"type": "json_object"},
         }
         return json.dumps(
             body, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -385,10 +422,13 @@ class OpenAIAdvisorAdapter:
             "and gates always outrank you: never suggest bypassing them, never "
             "claim authority over them and never state that a rule may be "
             "ignored.\n"
-            "Answer the implementation question with ONE json object (RFC 8259) "
-            "and nothing else, matching exactly:\n"
+            "Your perspective is critical review, never implementation advice: "
+            "identify WHAT can break, what is weak and which assumptions are "
+            "risky.\n"
+            "Answer the review question with ONE json object (RFC 8259) and "
+            "nothing else, matching exactly:\n"
             '{"status":"OK"|"ABSTAIN",'
-            '"claim":"<one sentence>",'
+            '"claim":"<one risk, weakness or risky assumption>",'
             '"evidence":["<concrete, checkable locator>"],'
             '"confidence":<number 0.0-1.0>,'
             '"severity":"LOW"|"MEDIUM"|"HIGH"|"CRITICAL",'
@@ -397,9 +437,9 @@ class OpenAIAdvisorAdapter:
             '- "OK" requires a non-empty claim AND at least one evidence entry;\n'
             "- every evidence entry must be a concrete, checkable locator "
             "(module:line, rule id, symbol, file path or document citation) - an "
-            "unsupported opinion is not evidence;\n"
-            '- use "ABSTAIN" when the given context is insufficient or you refuse '
-            'to answer, and explain it in "reason".'
+            "unsupported worry is not evidence;\n"
+            '- use "ABSTAIN" when the given context is insufficient or you '
+            'refuse to answer, and explain it in "reason".'
         )
 
     def _user_prompt(self, query: AdvisorQuery) -> str:
@@ -413,7 +453,8 @@ class OpenAIAdvisorAdapter:
         )
         step = "unknown" if query.step_no is None else str(query.step_no)
         return (
-            "Question (HOW to realize this?):\n"
+            "Question (WHAT can break, what is weak, what assumptions are "
+            "risky?):\n"
             f"{query.question}\n"
             f"Step: {step}\n"
             "Context (json):\n"
@@ -434,7 +475,8 @@ class OpenAIAdvisorAdapter:
             body=payload,
             headers={
                 # the only place the key ever appears
-                "Authorization": f"Bearer {api_key}",
+                "x-api-key": api_key,
+                "anthropic-version": self._api_version,
                 "Content-Type": "application/json",
                 "Accept": "application/json",
             },
@@ -442,21 +484,21 @@ class OpenAIAdvisorAdapter:
             timeout=self._timeout,
         )
         attempts = self._max_retries + 1
-        failure: Optional[OpenAIAdvisorError] = None
+        failure: Optional[ClaudeAdvisorError] = None
         for attempt in range(attempts):
             try:
                 response = self._transport(request)
             except HttpTransportError as error:
                 if not error.retryable:
-                    raise OpenAIAdvisorTransportError(
+                    raise ClaudeAdvisorTransportError(
                         _redact(str(error), api_key)
                     ) from error
                 failure = (
-                    OpenAIAdvisorTimeoutError(
-                        f"OpenAI request timed out after {self._timeout}s"
+                    ClaudeAdvisorTimeoutError(
+                        f"Claude request timed out after {self._timeout}s"
                     )
                     if error.timed_out
-                    else OpenAIAdvisorTransportError(
+                    else ClaudeAdvisorTransportError(
                         _redact(str(error), api_key)
                     )
                 )
@@ -466,21 +508,21 @@ class OpenAIAdvisorAdapter:
                     return response
                 if not is_retryable_status(status):
                     # permanent: a bad key, a bad request, a missing model, ...
-                    raise OpenAIAdvisorHttpError(
+                    raise ClaudeAdvisorHttpError(
                         self._status_message(status, response, api_key)
                     )
                 if status == HTTP_TOO_MANY_REQUESTS:
-                    failure = OpenAIAdvisorRateLimitError(
+                    failure = ClaudeAdvisorRateLimitError(
                         self._status_message(status, response, api_key)
                     )
                 else:
-                    failure = OpenAIAdvisorHttpError(
+                    failure = ClaudeAdvisorHttpError(
                         self._status_message(status, response, api_key)
                     )
             if attempt + 1 < attempts:
                 self._sleep(self._delay_for(attempt))
         if failure is None:  # pragma: no cover - unreachable by construction
-            raise OpenAIAdvisorError("OpenAI request failed without a cause")
+            raise ClaudeAdvisorError("Claude request failed without a cause")
         raise failure
 
     def _delay_for(self, attempt: int) -> float:
@@ -494,23 +536,23 @@ class OpenAIAdvisorAdapter:
         """A short status message - the provider text is redacted first."""
         detail = _excerpt(_redact(response.text(), secret))
         suffix = f": {detail}" if detail else ""
-        return f"OpenAI request failed with HTTP {status}{suffix}"
+        return f"Claude request failed with HTTP {status}{suffix}"
 
     # -- response parsing ---------------------------------------------------
     def _parse_envelope(
         self, response: HttpResponse, secret: Optional[str]
     ) -> dict:
-        """The chat-completions envelope as a JSON object."""
+        """The Messages envelope as a JSON object."""
         try:
             data = response.json()
         except ValueError as error:
-            raise OpenAIAdvisorInvalidResponseError(
-                "OpenAI returned a body that is not JSON: "
+            raise ClaudeAdvisorInvalidResponseError(
+                "Claude returned a body that is not JSON: "
                 + _excerpt(_redact(response.text(), secret))
             ) from error
         if not isinstance(data, dict):
-            raise OpenAIAdvisorInvalidResponseError(
-                "OpenAI response must be a JSON object; got "
+            raise ClaudeAdvisorInvalidResponseError(
+                "Claude response must be a JSON object; got "
                 f"{type(data).__name__}"
             )
         return data
@@ -519,21 +561,28 @@ class OpenAIAdvisorAdapter:
     def _content_of(
         envelope: Mapping[str, Any], secret: Optional[str]
     ) -> str:
-        """The assistant message text - validated, never redacted."""
-        choices = envelope.get("choices")
-        if not isinstance(choices, list) or not choices:
-            raise OpenAIAdvisorInvalidResponseError(
-                "OpenAI response carries no choices: "
+        """The first non-empty assistant text block - never redacted.
+
+        Anthropic returns a *list* of content blocks, so this is deliberately
+        provider-specific and NOT shared: only a ``text`` block carrying
+        something is an answer, and no such block is a contract defect rather
+        than a silently empty finding.
+        """
+        blocks = envelope.get("content")
+        if not isinstance(blocks, list) or not blocks:
+            raise ClaudeAdvisorInvalidResponseError(
+                "Claude response carries no content blocks: "
                 + _excerpt(_redact(json.dumps(envelope, default=str), secret))
             )
-        first = choices[0]
-        message = first.get("message") if isinstance(first, Mapping) else None
-        content = message.get("content") if isinstance(message, Mapping) else None
-        if not isinstance(content, str) or not content.strip():
-            raise OpenAIAdvisorInvalidResponseError(
-                "OpenAI response carries no assistant content"
-            )
-        return content
+        for block in blocks:
+            if not isinstance(block, Mapping):
+                continue
+            text = block.get("text")
+            if isinstance(text, str) and text.strip():
+                return text
+        raise ClaudeAdvisorInvalidResponseError(
+            "Claude response carries no assistant text"
+        )
 
     def _parse_contract(
         self, content: str, secret: Optional[str]
@@ -543,12 +592,12 @@ class OpenAIAdvisorAdapter:
         try:
             contract = json.loads(text)
         except ValueError as error:
-            raise OpenAIAdvisorInvalidResponseError(
+            raise ClaudeAdvisorInvalidResponseError(
                 "advisor answer is not JSON: "
                 + _excerpt(_redact(text, secret))
             ) from error
         if not isinstance(contract, dict):
-            raise OpenAIAdvisorInvalidResponseError(
+            raise ClaudeAdvisorInvalidResponseError(
                 "advisor answer must be a JSON object; got "
                 f"{type(contract).__name__}"
             )
@@ -562,22 +611,27 @@ class OpenAIAdvisorAdapter:
 
         The abstention check comes first on purpose: an ``ABSTAIN`` answer is a
         deliberate refusal and must be reported as
-        :class:`OpenAIAdvisorAbstainError`, never as a broken contract - even when
-        it carries no claim. A missing or unknown ``status``, by contrast, is a
-        contract violation, because nothing announced a refusal.
+        :class:`ClaudeAdvisorAbstainError`, never as a broken contract - even
+        when it carries no claim. A missing or unknown ``status``, by contrast,
+        is a contract violation, because nothing announced a refusal.
+
+        The finding stays provider-neutral: only ``source`` names the provider,
+        while ``claim``/``evidence``/``confidence``/``severity`` are exactly the
+        domain fields every advisor fills. The Critical Reviewer persona changes
+        the *question* the model answers, never the shape of the answer.
         """
         status = self._status_of(contract)
-        if status == CONTRACT_STATUS_ABSTAIN:
-            raise OpenAIAdvisorAbstainError(self._abstain_reason(contract))
+        if status == _CONTRACT_STATUS_ABSTAIN:
+            raise ClaudeAdvisorAbstainError(self._abstain_reason(contract))
         claim = self._claim_of(contract)
         evidence = self._evidence_of(contract)
         confidence = self._confidence_of(contract)
         severity = self._severity_of(contract)
         return Finding(
             id=_finding_id(
-                OPENAI_PROVIDER, self._model, query.step_no, claim, evidence
+                CLAUDE_PROVIDER, self._model, query.step_no, claim, evidence
             ),
-            source=OPENAI_PROVIDER,
+            source=CLAUDE_PROVIDER,
             claim=claim,
             evidence=evidence,
             confidence=confidence,
@@ -591,9 +645,9 @@ class OpenAIAdvisorAdapter:
         """The declared outcome token, normalized but strictly validated."""
         raw = contract.get("status")
         token = raw.strip().upper() if isinstance(raw, str) else ""
-        if token in (CONTRACT_STATUS_OK, CONTRACT_STATUS_ABSTAIN):
+        if token in (_CONTRACT_STATUS_OK, _CONTRACT_STATUS_ABSTAIN):
             return token
-        raise OpenAIAdvisorInvalidResponseError(
+        raise ClaudeAdvisorInvalidResponseError(
             'advisor answer field "status" must be "OK" or "ABSTAIN"; got '
             f"{_excerpt(str(raw), 40)!r} - a missing or unknown status is a "
             "contract violation, not an abstention"
@@ -604,13 +658,13 @@ class OpenAIAdvisorAdapter:
         reason = contract.get("reason")
         if isinstance(reason, str) and reason.strip():
             return reason.strip()
-        return ABSTAIN_REASON_FALLBACK
+        return _ABSTAIN_REASON_FALLBACK
 
     @staticmethod
     def _claim_of(contract: Mapping[str, Any]) -> str:
         claim = contract.get("claim")
         if not isinstance(claim, str) or not claim.strip():
-            raise OpenAIAdvisorInvalidResponseError(
+            raise ClaudeAdvisorInvalidResponseError(
                 'advisor answer field "claim" must be a non-empty string on an '
                 '"OK" answer'
             )
@@ -623,20 +677,20 @@ class OpenAIAdvisorAdapter:
         if isinstance(evidence, (str, bytes)) or not isinstance(
             evidence, (list, tuple)
         ):
-            raise OpenAIAdvisorInvalidResponseError(
+            raise ClaudeAdvisorInvalidResponseError(
                 'advisor answer field "evidence" must be a list of locators'
             )
         entries: list[str] = []
         for item in evidence:
             if not isinstance(item, str) or not item.strip():
-                raise OpenAIAdvisorInvalidResponseError(
+                raise ClaudeAdvisorInvalidResponseError(
                     'every "evidence" entry must be a non-empty string'
                 )
             entries.append(item.strip())
         if not entries:
-            raise OpenAIAdvisorInvalidResponseError(
+            raise ClaudeAdvisorInvalidResponseError(
                 'advisor answer field "evidence" must contain at least one '
-                'locator on an "OK" answer - a claim without evidence is not a '
+                'locator on an "OK" answer - a worry without evidence is not a '
                 "finding"
             )
         return tuple(entries)
@@ -647,13 +701,13 @@ class OpenAIAdvisorAdapter:
         if isinstance(confidence, bool) or not isinstance(
             confidence, (int, float)
         ):
-            raise OpenAIAdvisorInvalidResponseError(
+            raise ClaudeAdvisorInvalidResponseError(
                 'advisor answer field "confidence" must be a number between 0.0 '
                 "and 1.0"
             )
         value = float(confidence)
         if not 0.0 <= value <= 1.0:
-            raise OpenAIAdvisorInvalidResponseError(
+            raise ClaudeAdvisorInvalidResponseError(
                 'advisor answer field "confidence" must be between 0.0 and 1.0; '
                 f"got {value!r}"
             )
@@ -667,7 +721,7 @@ class OpenAIAdvisorAdapter:
             return Severity(token)
         except ValueError as error:
             valid = ", ".join(member.value for member in Severity)
-            raise OpenAIAdvisorInvalidResponseError(
+            raise ClaudeAdvisorInvalidResponseError(
                 f'advisor answer field "severity" must be one of ({valid}); got '
                 f"{_excerpt(str(raw), 40)!r}"
             ) from error
@@ -684,6 +738,10 @@ class OpenAIAdvisorAdapter:
         finally succeeds contributes exactly one record. If the provider sends no
         usage, nothing is recorded - this adapter never invents token counts.
 
+        The record is best-effort by design: a failing ``CostPort`` is surfaced
+        through ``last_telemetry_error``, never raised, so a valid finding is
+        never lost because telemetry broke. The API key is not part of a record.
+
         ``event_id`` is the provider-native response id, the stable identity of
         this one logical billable event: a redelivery or a repeated ``record()``
         of the same response is recognised instead of counted twice, while two
@@ -699,8 +757,8 @@ class OpenAIAdvisorAdapter:
         try:
             self._cost_sink.record(
                 CostRecord(
-                    provider=OPENAI_PROVIDER,
-                    event_id=_cost_event_id(OPENAI_PROVIDER, envelope),
+                    provider=CLAUDE_PROVIDER,
+                    event_id=_cost_event_id(CLAUDE_PROVIDER, envelope),
                     model=self._model,
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
@@ -728,28 +786,25 @@ class OpenAIAdvisorAdapter:
 
     @staticmethod
     def _usage_of(envelope: Mapping[str, Any]) -> Optional[tuple[int, int]]:
-        """The provider token counts, or ``None`` when they are unusable."""
+        """The Anthropic token counts, or ``None`` when they are unusable.
+
+        Deliberately provider-specific and NOT shared through ``._http``:
+        Anthropic reports ``input_tokens``/``output_tokens``, not the
+        ``prompt_tokens``/``completion_tokens`` pair OpenAI uses, so the mapping
+        to the neutral ``(input, output)`` tuple belongs to this adapter.
+        """
         usage = envelope.get("usage")
         if not isinstance(usage, Mapping):
             return None
-        prompt = usage.get("prompt_tokens")
-        completion = usage.get("completion_tokens")
-        for value in (prompt, completion):
+        sent = usage.get("input_tokens")
+        received = usage.get("output_tokens")
+        for value in (sent, received):
             if isinstance(value, bool) or not isinstance(value, int):
                 return None
             if value < 0:
                 return None
-        return int(prompt), int(completion)
+        return int(sent), int(received)
 
     def _price_for(self, model: str) -> ModelPrice:
         """The injected price, or the documented unknown-price fallback."""
         return self._pricing.get(model, UNKNOWN_PRICE)
-
-
-
-
-
-
-
-
-

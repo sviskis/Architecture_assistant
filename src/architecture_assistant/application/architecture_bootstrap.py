@@ -106,7 +106,7 @@ class RiskSpec:
 
 
 # ---------------------------------------------------------------------------
-# the formalised decisions (Steps 1-7)
+# the formalised decisions (Steps 1-7, plus the Step 23 final review)
 # ---------------------------------------------------------------------------
 
 BOOTSTRAP_ADRS: tuple[AdrSpec, ...] = (
@@ -232,6 +232,67 @@ BOOTSTRAP_ADRS: tuple[AdrSpec, ...] = (
         ),
         related=("ADR-006",),
     ),
+    AdrSpec(
+        id="ADR-009",
+        title="Human approval gate as its own controlled write path",
+        rationale=(
+            "The loop stops on WAITING_APPROVAL and the authoritative FSM "
+            "defines APPROVE and REJECT for that state, but the approval policy "
+            "requests approval for a large part of the operating matrix "
+            "(MANUAL always, SUPERVISED above LOW, AUTO above MEDIUM, and any "
+            "step flagged requires_human). Without an explicit approval path "
+            "that whole part of the workflow could only be aborted."
+        ),
+        decision=(
+            "ApprovalGate is the approval human path: it applies exactly the "
+            "APPROVE (WAITING_APPROVAL -> DISPATCHED) and REJECT "
+            "(WAITING_APPROVAL -> READY) transitions of the authoritative FSM, "
+            "publishes the same deterministic task artifacts the loop publishes "
+            "for an approved dispatch, and writes one Task row plus exactly one "
+            "audit entry inside one transaction. HumanOverride remains the "
+            "state-control human path, and the two are wired apart."
+        ),
+        consequences=(
+            "An approval-gated step can complete in V1 instead of only aborting",
+            "Filesystem publication and the DB commit are crash-safe, "
+            "replay-safe and fail-closed - explicitly not one atomic transaction",
+            "Two scoped human write paths instead of one; neither may reach "
+            "VERIFIED and neither may bypass the FSM",
+        ),
+        related=("ADR-004", "ADR-005"),
+    ),
+    AdrSpec(
+        id="ADR-010",
+        title="V1 freeze: documented limitations and operator procedures",
+        rationale=(
+            "The V1 final review must freeze an explicit boundary: which "
+            "limitations are accepted for V1, which are operational procedures, "
+            "and which are deferred - so nothing is silently promised and no "
+            "future step has to re-derive the decision."
+        ),
+        decision=(
+            "V1 freezes with documented limitations: a latent REVISE dead end "
+            "that the loop path cannot reach (the policy blocks at the budget); "
+            "an unacknowledged report left on the channel when a crash lands "
+            "between the durable outcome and the acknowledgement (manual "
+            "archive procedure); attempt counting retries rather than every "
+            "physical re-dispatch after a human unblock; the evidence-conflict "
+            "capability (merger/decision engine/judge) staying a library "
+            "capability that is not wired into the automatic loop; and no "
+            "CLI, daemon, plan ingestion or supervisor, so the controlled pilot "
+            "is operator-driven."
+        ),
+        consequences=(
+            "The controlled pilot runs operator-supervised, file-backed, "
+            "single-project, Python first, with no unattended daemon",
+            "Operators pause the project to stop the loop, abort only the four "
+            "abortable states, and never modify the database by hand",
+            "Automatic stale-report reconciliation, dispatch counting, loop "
+            "integration of the AI conflict layer and supervisory tooling are "
+            "deferred to a later version",
+        ),
+        related=("ADR-002", "ADR-007", "ADR-009"),
+    ),
 )
 
 
@@ -294,6 +355,94 @@ BOOTSTRAP_RISKS: tuple[RiskSpec, ...] = (
         mitigation=(
             "The orchestrator provides idempotent processing and explicit "
             "acknowledgement."
+        ),
+    ),
+    # The Step 23 final review accepted five limitations for v1 and deferred
+    # their hardening. Every one of them is documented in ADR-010.
+    RiskSpec(
+        id="RISK-007",
+        description=(
+            "Latent dead end: a step persisted in REVISE with exhausted "
+            "attempts has no FSM exit, so neither the loop, the monitor nor a "
+            "human command can resolve it"
+        ),
+        severity=Severity.LOW,
+        probability=0.05,
+        impact=Severity.MEDIUM,
+        owner="architect",
+        mitigation=(
+            "Not reachable through the loop: the review policy blocks at the "
+            "attempt budget instead of requesting a revision, so only external "
+            "state manipulation can produce it. The operator pauses the project "
+            "and treats the row as a manual repair."
+        ),
+    ),
+    RiskSpec(
+        id="RISK-008",
+        description=(
+            "Orphan report: a crash between the durable outcome and the "
+            "acknowledgement leaves an unacknowledged report on from_cline"
+        ),
+        severity=Severity.MEDIUM,
+        probability=0.1,
+        impact=Severity.LOW,
+        owner="architect",
+        mitigation=(
+            "The authoritative outcome is already durable and cannot be "
+            "replayed into another outcome, and the operator procedure is to "
+            "inspect from_cline after a restart and archive such a file "
+            "manually. Automatic reconciliation is deferred."
+        ),
+    ),
+    RiskSpec(
+        id="RISK-009",
+        description=(
+            "The attempt counter counts retries, not every physical "
+            "re-dispatch: after a human unblock at an exhausted budget the same "
+            "attempt is dispatched again"
+        ),
+        severity=Severity.MEDIUM,
+        probability=0.3,
+        impact=Severity.MEDIUM,
+        owner="architect",
+        mitigation=(
+            "Re-dispatch requires an explicit, audited human command; it is "
+            "never automatic. Operators abort or pause instead of repeating "
+            "UNBLOCK once the budget is spent. A dispatch counter is deferred."
+        ),
+    ),
+    RiskSpec(
+        id="RISK-010",
+        description=(
+            "The evidence-conflict capability (evidence merger, decision "
+            "engine, judge) is not wired into the automatic loop, so nothing "
+            "raises the CONFLICT state and no AI verdict can influence a step"
+        ),
+        severity=Severity.MEDIUM,
+        probability=0.5,
+        impact=Severity.MEDIUM,
+        owner="architect",
+        mitigation=(
+            "Deliberate V1 boundary: the deterministic rules are the only "
+            "verdict and the AI layer stays consultative. The capability is "
+            "tested and available to a caller; loop integration is deferred."
+        ),
+    ),
+    RiskSpec(
+        id="RISK-011",
+        description=(
+            "No CLI, daemon or plan ingestion: driving the loop and seeding the "
+            "step plan depend on an operator procedure"
+        ),
+        severity=Severity.MEDIUM,
+        probability=0.5,
+        impact=Severity.MEDIUM,
+        owner="architect",
+        mitigation=(
+            "The controlled pilot is explicitly operator-supervised: the "
+            "operator seeds the plan through the repository port, calls the "
+            "scheduler after each worker report and never edits the database. "
+            "Tooling is deferred."
         ),
     ),
 )

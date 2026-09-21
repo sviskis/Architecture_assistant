@@ -100,15 +100,24 @@ class TestAuditEntry:
         assert AuditEntry.from_dict(entry.to_dict()) == entry
 
     def test_entity_types_are_adr_risk_step_and_acr(self) -> None:
-        """``STEP`` was added with the Step 9 orchestrator, ``ACR`` with Step 11."""
+        """``STEP`` was added with the Step 9 orchestrator, ``ACR`` with Step 11
+        and ``PROJECT`` with the Step 20 human-override use-case.
+        """
         assert {member.value for member in AuditEntityType} == {
             "ADR",
             "RISK",
             "STEP",
             "ACR",
+            "PROJECT",
         }
 
     def test_actions_are_canonical(self) -> None:
+        """``PAUSE``/``RESUME``/``SET_MODE`` are the Step 20 project vocabulary.
+
+        No step-level verb was added with Step 20: a step transition stays
+        ``UPDATE`` (the Step entity's one transition action) and the human
+        provenance is carried by ``detail``.
+        """
         assert {member.value for member in AuditAction} == {
             "CREATE",
             "ACCEPT",
@@ -120,6 +129,9 @@ class TestAuditEntry:
             "MITIGATE",
             "CLOSE",
             "REOPEN",
+            "PAUSE",
+            "RESUME",
+            "SET_MODE",
         }
 
 

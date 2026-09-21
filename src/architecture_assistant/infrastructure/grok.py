@@ -1,43 +1,58 @@
-"""OpenAI advisor adapter - the "Implementation Analyst" of :class:`AdvisorPort`.
+"""Grok advisor adapter - the "Challenger / Alternative Framing" of the port.
 
-The assistant is *deterministic first*: the architecture validator, the
-realization gate, the step FSM and the review policy decide everything that can
-be decided from code and persisted state. This adapter adds a **consultative**
-capability on top of that - it answers the question *"HOW to realize this?"* with
-a structured, evidence-based :class:`~architecture_assistant.domain.models.Finding`
-and nothing else.
+The assistant already has two consultative perspectives: the OpenAI adapter
+(Step 12) is the *Implementation Analyst* ("HOW to realize this?") and the Claude
+adapter (Step 13) is the *Critical Reviewer / Risk Analyst* ("WHAT can break,
+what is weak, what assumptions are risky?"). This adapter adds the third,
+deliberately different one - the **Challenger / Alternative Framing**:
 
-It deliberately cannot do more than that:
+    **"ARE we solving the right problem? What alternative approach exists?"**
 
-* it is **never** wired into ``decide_review``, the realization gate or the
-  architecture validator, so a model answer can never override a deterministic
-  rule, a persisted baseline or a gate verdict;
+All three are *consultative* and none of them can decide anything:
+
+* this adapter is **never** wired into ``decide_review``, the realization gate,
+  the orchestrator or the architecture validator, so a model answer can never
+  override a deterministic rule, a persisted baseline or a gate verdict;
 * it returns a :class:`Finding <architecture_assistant.domain.models.Finding>` -
   never a :class:`Decision <architecture_assistant.domain.models.Decision>`, a
-  version, a rule change or an ADR. Judging conflicts is a later, separate step;
+  version, a rule change or an ADR. There is **no** evidence merger, **no** judge,
+  **no** majority vote and **no** decision engine here: the three advisors stay
+  fully independent, they never vote, and deterministic architecture rules
+  outrank every one of them;
 * it must **fail closed**. A timeout, a broken HTTP status, a malformed model
-  answer or an explicit abstention raises a specific error - the adapter never
-  invents a finding to keep the loop moving.
+  answer or an explicit abstention raises a specific error - it never invents an
+  alternative to keep the loop moving.
 
-Only two provider-specific facts live here: the OpenAI chat-completions wire
-format and the ``OPENAI_API_KEY`` environment variable. Nothing the rest of the
-system sees is provider-shaped.
+The role is adapter metadata (the system-prompt persona), not a domain concept:
+the finding carries ``source="grok"`` and the domain model is unchanged.
 
-The provider-neutral machinery this adapter needs - the HTTP request/response
-DTOs, the ``urllib`` transport, the neutral transport error, the retry
-classification, secret redaction, the primitive validators, the deterministic
-finding-id helper and the price model - lives in the private ``._http`` module
-and is shared with the other provider adapters (Claude, and later Grok). It is
-re-imported here unchanged, so this module's public surface is exactly what it
-was before the extraction.
+Wire format
+-----------
+Provider-specific facts live here and nowhere else: the xAI chat-completions
+request/response shape (``messages`` in, ``choices[0].message.content`` and
+``usage.prompt_tokens``/``completion_tokens`` out), the ``Authorization: Bearer``
+header, the ``https://api.x.ai/v1/chat/completions`` endpoint and the
+``XAI_API_KEY`` environment variable. xAI is OpenAI-compatible, so the shape looks
+like the OpenAI adapter's - it is still this module's own code, never shared.
+
+Everything mechanical is shared with the other provider adapters through the
+private ``._http`` module (HTTP DTOs, ``urllib`` transport, transport error,
+retry classification, redaction, primitive validators, the deterministic
+finding-id helper and the price model). ``_http.py`` is deliberately NOT extended
+for this step. Retry, abstain, cost and evidence semantics are identical to the
+OpenAI and Claude adapters by design.
+
+Model selection is *configuration, never architecture truth*: see
+:func:`resolve_grok_model` for the documented resolution order.
 
 Security / secrets
 ------------------
-The API key is **never** hardcoded, never a default value, never stored on the
-instance, never part of the request body, never in ``repr`` and never in an error
-message: it travels only in the ``Authorization`` header (or in the injected
-``api_key`` argument). Response and exception text is redacted before it is
-embedded in an error, so even a pathological provider echo cannot leak it.
+The API key is **never** hardcoded, never a default, never stored beyond
+construction, never in the request body, never in the ``Finding``, never in a
+``CostRecord``, never in ``repr``, never in an error message and never in a
+report: it travels only in the ``Authorization`` header set here. Response and
+exception text is redacted before it is embedded in an error, so even a
+pathological provider echo cannot leak it.
 
 Determinism
 -----------
@@ -81,134 +96,153 @@ from ._http import (
 )
 
 __all__ = [
-    "OPENAI_PROVIDER",
-    "DEFAULT_OPENAI_MODEL",
-    "IMPLEMENTATION_ANALYST_ROLE",
-    "OPENAI_CHAT_COMPLETIONS_URL",
-    "OPENAI_API_KEY_ENV_VAR",
-    "DEFAULT_TIMEOUT_SECONDS",
-    "DEFAULT_MAX_RETRIES",
-    "DEFAULT_BACKOFF_SCHEDULE",
-    "DEFAULT_MAX_OUTPUT_TOKENS",
-    "ABSTAIN_REASON_FALLBACK",
-    "CONTRACT_STATUS_OK",
-    "CONTRACT_STATUS_ABSTAIN",
-    "UNKNOWN_PRICE",
-    "ModelPrice",
-    "HttpRequest",
-    "HttpResponse",
-    "HttpTransportError",
-    "OpenAIAdvisorError",
-    "MissingApiKeyError",
-    "OpenAIAdvisorTransportError",
-    "OpenAIAdvisorTimeoutError",
-    "OpenAIAdvisorRateLimitError",
-    "OpenAIAdvisorHttpError",
-    "OpenAIAdvisorInvalidResponseError",
-    "OpenAIAdvisorAbstainError",
-    "OpenAIAdvisorAdapter",
+    "GROK_PROVIDER",
+    "DEFAULT_GROK_MODEL",
+    "GROK_MODEL_ENV_VAR",
+    "CHALLENGER_ROLE",
+    "GROK_CHAT_COMPLETIONS_URL",
+    "XAI_API_KEY_ENV_VAR",
+    "DEFAULT_GROK_MAX_OUTPUT_TOKENS",
+    "resolve_grok_model",
+    "GrokAdvisorError",
+    "GrokMissingApiKeyError",
+    "GrokAdvisorTransportError",
+    "GrokAdvisorTimeoutError",
+    "GrokAdvisorRateLimitError",
+    "GrokAdvisorHttpError",
+    "GrokAdvisorInvalidResponseError",
+    "GrokAdvisorAbstainError",
+    "GrokAdvisorAdapter",
 ]
 
 #: The provider id stored in ``Finding.source`` and ``CostRecord.provider``.
-OPENAI_PROVIDER = "openai"
+GROK_PROVIDER = "grok"
 
-#: The single advisor role of this step. The role is *adapter metadata* (the
-#: persona of the system prompt), not a domain concept: the domain contract of a
-#: finding carries ``source``, and a second OpenAI role would be a second adapter.
-IMPLEMENTATION_ANALYST_ROLE = "Implementation Analyst"
+#: The single documented adapter default - used only when neither the
+#: constructor nor the environment names a model. A model name is configuration,
+#: never a statement about price, availability or architecture.
+DEFAULT_GROK_MODEL = "grok-4.6"
 
-#: Chat-completions endpoint - the only OpenAI URL this codebase knows.
-OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
+#: Optional environment variable naming the model (configuration, not a rule).
+GROK_MODEL_ENV_VAR = "GROK_MODEL"
+
+#: The advisor persona: a challenger that reframes the problem - not an analyst
+#: and not a critic. Adapter metadata, not a domain concept.
+CHALLENGER_ROLE = "Challenger / Alternative Framing"
+
+#: xAI chat-completions endpoint - the only Grok URL this codebase knows.
+GROK_CHAT_COMPLETIONS_URL = "https://api.x.ai/v1/chat/completions"
 
 #: The environment variable the key is read from when none is injected.
-OPENAI_API_KEY_ENV_VAR = "OPENAI_API_KEY"
+XAI_API_KEY_ENV_VAR = "XAI_API_KEY"
 
-#: Model asked for the implementation analysis. A *default*, injected by the
-#: composition root - never a statement about price or availability.
-DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
-
-#: OpenAI's own output budget for one analysis (request shaping, not shared).
-DEFAULT_MAX_OUTPUT_TOKENS = 1024
+#: Grok's own output budget for one challenge (request shaping, not shared).
+DEFAULT_GROK_MAX_OUTPUT_TOKENS = 1024
 
 #: Used when the model abstains without putting anything in ``reason``.
-ABSTAIN_REASON_FALLBACK = "the model abstained without stating a reason"
+_ABSTAIN_REASON_FALLBACK = "the model abstained without stating a reason"
 
-CONTRACT_STATUS_OK = "OK"
-CONTRACT_STATUS_ABSTAIN = "ABSTAIN"
-
-
-class OpenAIAdvisorError(Exception):
-    """Base class for every OpenAI advisor failure."""
+_CONTRACT_STATUS_OK = "OK"
+_CONTRACT_STATUS_ABSTAIN = "ABSTAIN"
 
 
-class MissingApiKeyError(OpenAIAdvisorError):
+def resolve_grok_model(model: Optional[str] = None) -> str:
+    """Resolve the Grok model through one documented order.
+
+    A provider model name is **configuration, never architecture truth**, so it
+    is never hardcoded into a rule or a contract:
+
+    1. the explicit ``model`` argument (constructor / composition config), when
+       non-blank;
+    2. the optional :data:`GROK_MODEL_ENV_VAR` environment variable, when
+       non-blank;
+    3. :data:`DEFAULT_GROK_MODEL` - the one documented adapter default.
+
+    Nothing here checks that the model exists. The assistant must compose and run
+    fully offline, so an unknown or retired model name is a provider-side failure
+    later, never a start-up failure now.
+    """
+    if model is not None and str(model).strip():
+        return str(model).strip()
+    from_env = os.environ.get(GROK_MODEL_ENV_VAR, "")
+    if from_env.strip():
+        return from_env.strip()
+    return DEFAULT_GROK_MODEL
+
+
+class GrokAdvisorError(Exception):
+    """Base class for every Grok advisor failure."""
+
+
+class GrokMissingApiKeyError(GrokAdvisorError):
     """Raised when neither the argument nor the environment provides a key."""
 
 
-class OpenAIAdvisorTransportError(OpenAIAdvisorError):
+class GrokAdvisorTransportError(GrokAdvisorError):
     """The request could not be delivered (retries used up)."""
 
 
-class OpenAIAdvisorTimeoutError(OpenAIAdvisorTransportError):
+class GrokAdvisorTimeoutError(GrokAdvisorTransportError):
     """The request timed out (retries used up)."""
 
 
-class OpenAIAdvisorRateLimitError(OpenAIAdvisorError):
+class GrokAdvisorRateLimitError(GrokAdvisorError):
     """HTTP 429 (retries used up)."""
 
 
-class OpenAIAdvisorHttpError(OpenAIAdvisorError):
+class GrokAdvisorHttpError(GrokAdvisorError):
     """A non-retryable status - or a retryable one that never recovered."""
 
 
-class OpenAIAdvisorInvalidResponseError(OpenAIAdvisorError):
+class GrokAdvisorInvalidResponseError(GrokAdvisorError):
     """The answer violated the structured output contract.
 
-    This is **not** an abstention: an abstention is the model saying so. A broken
-    contract is a defect and must be told apart from a deliberate refusal.
+    This is the *defect* path: the model returned something that is not the
+    agreed json object, or an ``OK`` answer without the claim/evidence the
+    contract requires. It is deliberately distinct from
+    :class:`GrokAdvisorAbstainError` - a broken contract must never be reported
+    as a deliberate refusal.
     """
 
 
-class OpenAIAdvisorAbstainError(OpenAIAdvisorError):
-    """The model explicitly abstained or refused to answer."""
+class GrokAdvisorAbstainError(GrokAdvisorError):
+    """The model explicitly abstained or refused to answer.
+
+    A legitimate outcome, not a defect: the surrounding system decides what an
+    abstention means; the adapter only reports it faithfully, with the model's
+    own reason (or a documented fallback when it gave none).
+    """
 
     def __init__(self, reason: str) -> None:
         text = (
-            reason
+            reason.strip()
             if isinstance(reason, str) and reason.strip()
-            else ABSTAIN_REASON_FALLBACK
+            else _ABSTAIN_REASON_FALLBACK
         )
-        super().__init__(f"advisor abstained: {text}")
+        super().__init__(f"Grok advisor abstained: {text}")
         self.reason = text
 
 
-# ---------------------------------------------------------------------------
-# Provider-neutral transport, price model and primitive validators are shared
-# through ``._http`` (see that module's docstring for the exact boundary): they
-# are re-imported here so the Step 12 public surface stays backwards compatible,
-# while everything OpenAI-specific stays in this module.
-# ---------------------------------------------------------------------------
-
-
-class OpenAIAdvisorAdapter:
-    """OpenAI implementation of :class:`AdvisorPort` (Implementation Analyst).
+class GrokAdvisorAdapter:
+    """Grok implementation of the advisor port (Challenger / Alternative Framing).
 
     The adapter is *only* a capability: constructing it opens no connection, reads
     no key and changes no state, so the composition root may always build it and a
-    project without ``OPENAI_API_KEY`` simply never calls :meth:`advise`.
+    project without ``XAI_API_KEY`` simply never calls :meth:`advise`. The
+    deterministic gate is entirely unaffected either way.
     """
 
     def __init__(
         self,
         api_key: Optional[str] = None,
         *,
-        url: str = OPENAI_CHAT_COMPLETIONS_URL,
-        model: str = DEFAULT_OPENAI_MODEL,
-        role: str = IMPLEMENTATION_ANALYST_ROLE,
+        url: str = GROK_CHAT_COMPLETIONS_URL,
+        model: Optional[str] = None,
+        role: str = CHALLENGER_ROLE,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         max_retries: int = DEFAULT_MAX_RETRIES,
         backoff_schedule: Sequence[float] = DEFAULT_BACKOFF_SCHEDULE,
-        max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
+        max_output_tokens: int = DEFAULT_GROK_MAX_OUTPUT_TOKENS,
         transport: Optional[Callable[[HttpRequest], HttpResponse]] = None,
         cost_sink: Optional[CostPort] = None,
         pricing: Optional[Mapping[str, ModelPrice]] = None,
@@ -224,7 +258,8 @@ class OpenAIAdvisorAdapter:
             api_key if isinstance(api_key, str) and api_key.strip() else None
         )
         self._url = _require_text(url, "url")
-        self._model = _require_text(model, "model")
+        # config -> environment -> documented default; never architecture truth
+        self._model = _require_text(resolve_grok_model(model), "model")
         self._role = _require_text(role, "role")
         self._timeout = _require_number(
             timeout_seconds, "timeout_seconds", minimum=1e-6
@@ -278,11 +313,11 @@ class OpenAIAdvisorAdapter:
     @property
     def provider(self) -> str:
         """The provider id this adapter reports as ``Finding.source``."""
-        return OPENAI_PROVIDER
+        return GROK_PROVIDER
 
     @property
     def model(self) -> str:
-        """The model asked for the analysis."""
+        """The resolved model asked for the challenge."""
         return self._model
 
     @property
@@ -299,7 +334,7 @@ class OpenAIAdvisorAdapter:
         The key itself is never stored beyond construction and never returned.
         """
         return bool(self._api_key) or bool(
-            os.environ.get(OPENAI_API_KEY_ENV_VAR, "").strip()
+            os.environ.get(XAI_API_KEY_ENV_VAR, "").strip()
         )
 
     @property
@@ -315,14 +350,14 @@ class OpenAIAdvisorAdapter:
     def __repr__(self) -> str:
         """Deliberately key-free - the API key must never be rendered."""
         return (
-            f"{type(self).__name__}(provider={OPENAI_PROVIDER!r}, "
+            f"{type(self).__name__}(provider={GROK_PROVIDER!r}, "
             f"model={self._model!r}, role={self._role!r}, "
             f"configured={self.is_configured})"
         )
 
     # -- AdvisorPort -------------------------------------------------------
     def advise(self, query: AdvisorQuery) -> Finding:
-        """Answer one implementation question with an evidence-based finding.
+        """Answer one reframing question with an evidence-based finding.
 
         Raises instead of guessing: a missing key, an unrecoverable transport or
         status failure, a broken output contract, or an explicit abstention each
@@ -348,20 +383,23 @@ class OpenAIAdvisorAdapter:
         """The key for this call: argument first, environment second."""
         if self._api_key:
             return self._api_key
-        from_env = os.environ.get(OPENAI_API_KEY_ENV_VAR, "")
+        from_env = os.environ.get(XAI_API_KEY_ENV_VAR, "")
         if from_env.strip():
             return from_env
-        raise MissingApiKeyError(
-            "no OpenAI API key available: pass api_key=... or set the "
-            f"{OPENAI_API_KEY_ENV_VAR} environment variable"
+        raise GrokMissingApiKeyError(
+            "no xAI API key available: pass api_key=... or set the "
+            f"{XAI_API_KEY_ENV_VAR} environment variable"
         )
 
     # -- request -----------------------------------------------------------
     def _build_payload(self, query: AdvisorQuery) -> bytes:
         """The exact request body - serialized once, reused for every attempt.
 
-        Canonical JSON (sorted keys, compact separators) keeps the bytes stable,
-        which is what makes an identical retry payload testable.
+        The xAI chat-completions shape (OpenAI-compatible): a ``system`` message,
+        a ``user`` message and an explicit ``json_object`` response format, since
+        the structured contract is what the rest of the system consumes. Canonical
+        JSON (sorted keys, compact separators) keeps the bytes stable, which is
+        what makes an identical retry payload testable.
         """
         body = {
             "model": self._model,
@@ -385,10 +423,13 @@ class OpenAIAdvisorAdapter:
             "and gates always outrank you: never suggest bypassing them, never "
             "claim authority over them and never state that a rule may be "
             "ignored.\n"
-            "Answer the implementation question with ONE json object (RFC 8259) "
-            "and nothing else, matching exactly:\n"
+            "Your perspective is deliberately different from an implementation "
+            "analyst and from a critic: challenge the framing. Ask ARE we solving "
+            "the right problem, and name what alternative approach exists.\n"
+            "Answer the reframing question with ONE json object (RFC 8259) and "
+            "nothing else, matching exactly:\n"
             '{"status":"OK"|"ABSTAIN",'
-            '"claim":"<one sentence>",'
+            '"claim":"<one alternative framing or a challenged assumption>",'
             '"evidence":["<concrete, checkable locator>"],'
             '"confidence":<number 0.0-1.0>,'
             '"severity":"LOW"|"MEDIUM"|"HIGH"|"CRITICAL",'
@@ -396,10 +437,12 @@ class OpenAIAdvisorAdapter:
             "Rules:\n"
             '- "OK" requires a non-empty claim AND at least one evidence entry;\n'
             "- every evidence entry must be a concrete, checkable locator "
-            "(module:line, rule id, symbol, file path or document citation) - an "
-            "unsupported opinion is not evidence;\n"
-            '- use "ABSTAIN" when the given context is insufficient or you refuse '
-            'to answer, and explain it in "reason".'
+            "(module:line, rule id, symbol, file path or document citation) - a "
+            "provocative idea without evidence is not a finding;\n"
+            "- propose ONE alternative or challenge, never a competing decision: "
+            "you cannot overrule a rule, a baseline or a gate verdict;\n"
+            '- use "ABSTAIN" when the given context is insufficient or you '
+            'refuse to answer, and explain it in "reason".'
         )
 
     def _user_prompt(self, query: AdvisorQuery) -> str:
@@ -413,7 +456,8 @@ class OpenAIAdvisorAdapter:
         )
         step = "unknown" if query.step_no is None else str(query.step_no)
         return (
-            "Question (HOW to realize this?):\n"
+            "Question (ARE we solving the right problem? What alternative "
+            "approach exists?):\n"
             f"{query.question}\n"
             f"Step: {step}\n"
             "Context (json):\n"
@@ -442,21 +486,21 @@ class OpenAIAdvisorAdapter:
             timeout=self._timeout,
         )
         attempts = self._max_retries + 1
-        failure: Optional[OpenAIAdvisorError] = None
+        failure: Optional[GrokAdvisorError] = None
         for attempt in range(attempts):
             try:
                 response = self._transport(request)
             except HttpTransportError as error:
                 if not error.retryable:
-                    raise OpenAIAdvisorTransportError(
+                    raise GrokAdvisorTransportError(
                         _redact(str(error), api_key)
                     ) from error
                 failure = (
-                    OpenAIAdvisorTimeoutError(
-                        f"OpenAI request timed out after {self._timeout}s"
+                    GrokAdvisorTimeoutError(
+                        f"Grok request timed out after {self._timeout}s"
                     )
                     if error.timed_out
-                    else OpenAIAdvisorTransportError(
+                    else GrokAdvisorTransportError(
                         _redact(str(error), api_key)
                     )
                 )
@@ -466,21 +510,21 @@ class OpenAIAdvisorAdapter:
                     return response
                 if not is_retryable_status(status):
                     # permanent: a bad key, a bad request, a missing model, ...
-                    raise OpenAIAdvisorHttpError(
+                    raise GrokAdvisorHttpError(
                         self._status_message(status, response, api_key)
                     )
                 if status == HTTP_TOO_MANY_REQUESTS:
-                    failure = OpenAIAdvisorRateLimitError(
+                    failure = GrokAdvisorRateLimitError(
                         self._status_message(status, response, api_key)
                     )
                 else:
-                    failure = OpenAIAdvisorHttpError(
+                    failure = GrokAdvisorHttpError(
                         self._status_message(status, response, api_key)
                     )
             if attempt + 1 < attempts:
                 self._sleep(self._delay_for(attempt))
         if failure is None:  # pragma: no cover - unreachable by construction
-            raise OpenAIAdvisorError("OpenAI request failed without a cause")
+            raise GrokAdvisorError("Grok request failed without a cause")
         raise failure
 
     def _delay_for(self, attempt: int) -> float:
@@ -494,7 +538,7 @@ class OpenAIAdvisorAdapter:
         """A short status message - the provider text is redacted first."""
         detail = _excerpt(_redact(response.text(), secret))
         suffix = f": {detail}" if detail else ""
-        return f"OpenAI request failed with HTTP {status}{suffix}"
+        return f"Grok request failed with HTTP {status}{suffix}"
 
     # -- response parsing ---------------------------------------------------
     def _parse_envelope(
@@ -504,13 +548,13 @@ class OpenAIAdvisorAdapter:
         try:
             data = response.json()
         except ValueError as error:
-            raise OpenAIAdvisorInvalidResponseError(
-                "OpenAI returned a body that is not JSON: "
+            raise GrokAdvisorInvalidResponseError(
+                "Grok returned a body that is not JSON: "
                 + _excerpt(_redact(response.text(), secret))
             ) from error
         if not isinstance(data, dict):
-            raise OpenAIAdvisorInvalidResponseError(
-                "OpenAI response must be a JSON object; got "
+            raise GrokAdvisorInvalidResponseError(
+                "Grok response must be a JSON object; got "
                 f"{type(data).__name__}"
             )
         return data
@@ -519,19 +563,25 @@ class OpenAIAdvisorAdapter:
     def _content_of(
         envelope: Mapping[str, Any], secret: Optional[str]
     ) -> str:
-        """The assistant message text - validated, never redacted."""
+        """The assistant message text from ``choices[0]`` - never redacted.
+
+        This is deliberately provider-specific and NOT shared: the xAI
+        chat-completions shape puts the answer at
+        ``choices[0].message.content``, and no usable content there is a contract
+        defect rather than a silently empty finding.
+        """
         choices = envelope.get("choices")
         if not isinstance(choices, list) or not choices:
-            raise OpenAIAdvisorInvalidResponseError(
-                "OpenAI response carries no choices: "
+            raise GrokAdvisorInvalidResponseError(
+                "Grok response carries no choices: "
                 + _excerpt(_redact(json.dumps(envelope, default=str), secret))
             )
         first = choices[0]
         message = first.get("message") if isinstance(first, Mapping) else None
         content = message.get("content") if isinstance(message, Mapping) else None
         if not isinstance(content, str) or not content.strip():
-            raise OpenAIAdvisorInvalidResponseError(
-                "OpenAI response carries no assistant content"
+            raise GrokAdvisorInvalidResponseError(
+                "Grok response carries no assistant content"
             )
         return content
 
@@ -543,12 +593,12 @@ class OpenAIAdvisorAdapter:
         try:
             contract = json.loads(text)
         except ValueError as error:
-            raise OpenAIAdvisorInvalidResponseError(
+            raise GrokAdvisorInvalidResponseError(
                 "advisor answer is not JSON: "
                 + _excerpt(_redact(text, secret))
             ) from error
         if not isinstance(contract, dict):
-            raise OpenAIAdvisorInvalidResponseError(
+            raise GrokAdvisorInvalidResponseError(
                 "advisor answer must be a JSON object; got "
                 f"{type(contract).__name__}"
             )
@@ -562,22 +612,28 @@ class OpenAIAdvisorAdapter:
 
         The abstention check comes first on purpose: an ``ABSTAIN`` answer is a
         deliberate refusal and must be reported as
-        :class:`OpenAIAdvisorAbstainError`, never as a broken contract - even when
+        :class:`GrokAdvisorAbstainError`, never as a broken contract - even when
         it carries no claim. A missing or unknown ``status``, by contrast, is a
         contract violation, because nothing announced a refusal.
+
+        The finding stays provider-neutral: only ``source`` names the provider,
+        while ``claim``/``evidence``/``confidence``/``severity`` are exactly the
+        domain fields every advisor fills. The Challenger persona changes the
+        *question* the model answers, never the shape of the answer - and the
+        finding is one independent opinion, never a vote.
         """
         status = self._status_of(contract)
-        if status == CONTRACT_STATUS_ABSTAIN:
-            raise OpenAIAdvisorAbstainError(self._abstain_reason(contract))
+        if status == _CONTRACT_STATUS_ABSTAIN:
+            raise GrokAdvisorAbstainError(self._abstain_reason(contract))
         claim = self._claim_of(contract)
         evidence = self._evidence_of(contract)
         confidence = self._confidence_of(contract)
         severity = self._severity_of(contract)
         return Finding(
             id=_finding_id(
-                OPENAI_PROVIDER, self._model, query.step_no, claim, evidence
+                GROK_PROVIDER, self._model, query.step_no, claim, evidence
             ),
-            source=OPENAI_PROVIDER,
+            source=GROK_PROVIDER,
             claim=claim,
             evidence=evidence,
             confidence=confidence,
@@ -591,9 +647,9 @@ class OpenAIAdvisorAdapter:
         """The declared outcome token, normalized but strictly validated."""
         raw = contract.get("status")
         token = raw.strip().upper() if isinstance(raw, str) else ""
-        if token in (CONTRACT_STATUS_OK, CONTRACT_STATUS_ABSTAIN):
+        if token in (_CONTRACT_STATUS_OK, _CONTRACT_STATUS_ABSTAIN):
             return token
-        raise OpenAIAdvisorInvalidResponseError(
+        raise GrokAdvisorInvalidResponseError(
             'advisor answer field "status" must be "OK" or "ABSTAIN"; got '
             f"{_excerpt(str(raw), 40)!r} - a missing or unknown status is a "
             "contract violation, not an abstention"
@@ -604,13 +660,13 @@ class OpenAIAdvisorAdapter:
         reason = contract.get("reason")
         if isinstance(reason, str) and reason.strip():
             return reason.strip()
-        return ABSTAIN_REASON_FALLBACK
+        return _ABSTAIN_REASON_FALLBACK
 
     @staticmethod
     def _claim_of(contract: Mapping[str, Any]) -> str:
         claim = contract.get("claim")
         if not isinstance(claim, str) or not claim.strip():
-            raise OpenAIAdvisorInvalidResponseError(
+            raise GrokAdvisorInvalidResponseError(
                 'advisor answer field "claim" must be a non-empty string on an '
                 '"OK" answer'
             )
@@ -623,21 +679,21 @@ class OpenAIAdvisorAdapter:
         if isinstance(evidence, (str, bytes)) or not isinstance(
             evidence, (list, tuple)
         ):
-            raise OpenAIAdvisorInvalidResponseError(
+            raise GrokAdvisorInvalidResponseError(
                 'advisor answer field "evidence" must be a list of locators'
             )
         entries: list[str] = []
         for item in evidence:
             if not isinstance(item, str) or not item.strip():
-                raise OpenAIAdvisorInvalidResponseError(
+                raise GrokAdvisorInvalidResponseError(
                     'every "evidence" entry must be a non-empty string'
                 )
             entries.append(item.strip())
         if not entries:
-            raise OpenAIAdvisorInvalidResponseError(
+            raise GrokAdvisorInvalidResponseError(
                 'advisor answer field "evidence" must contain at least one '
-                'locator on an "OK" answer - a claim without evidence is not a '
-                "finding"
+                'locator on an "OK" answer - a provocative idea without evidence '
+                "is not a finding"
             )
         return tuple(entries)
 
@@ -647,13 +703,13 @@ class OpenAIAdvisorAdapter:
         if isinstance(confidence, bool) or not isinstance(
             confidence, (int, float)
         ):
-            raise OpenAIAdvisorInvalidResponseError(
+            raise GrokAdvisorInvalidResponseError(
                 'advisor answer field "confidence" must be a number between 0.0 '
                 "and 1.0"
             )
         value = float(confidence)
         if not 0.0 <= value <= 1.0:
-            raise OpenAIAdvisorInvalidResponseError(
+            raise GrokAdvisorInvalidResponseError(
                 'advisor answer field "confidence" must be between 0.0 and 1.0; '
                 f"got {value!r}"
             )
@@ -667,7 +723,7 @@ class OpenAIAdvisorAdapter:
             return Severity(token)
         except ValueError as error:
             valid = ", ".join(member.value for member in Severity)
-            raise OpenAIAdvisorInvalidResponseError(
+            raise GrokAdvisorInvalidResponseError(
                 f'advisor answer field "severity" must be one of ({valid}); got '
                 f"{_excerpt(str(raw), 40)!r}"
             ) from error
@@ -684,6 +740,10 @@ class OpenAIAdvisorAdapter:
         finally succeeds contributes exactly one record. If the provider sends no
         usage, nothing is recorded - this adapter never invents token counts.
 
+        The record is best-effort by design: a failing ``CostPort`` is surfaced
+        through ``last_telemetry_error``, never raised, so a valid finding is
+        never lost because telemetry broke. The API key is not part of a record.
+
         ``event_id`` is the provider-native response id, the stable identity of
         this one logical billable event: a redelivery or a repeated ``record()``
         of the same response is recognised instead of counted twice, while two
@@ -699,8 +759,8 @@ class OpenAIAdvisorAdapter:
         try:
             self._cost_sink.record(
                 CostRecord(
-                    provider=OPENAI_PROVIDER,
-                    event_id=_cost_event_id(OPENAI_PROVIDER, envelope),
+                    provider=GROK_PROVIDER,
+                    event_id=_cost_event_id(GROK_PROVIDER, envelope),
                     model=self._model,
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
@@ -728,7 +788,13 @@ class OpenAIAdvisorAdapter:
 
     @staticmethod
     def _usage_of(envelope: Mapping[str, Any]) -> Optional[tuple[int, int]]:
-        """The provider token counts, or ``None`` when they are unusable."""
+        """The xAI token counts, or ``None`` when they are unusable.
+
+        Provider-specific and NOT shared through ``._http``: the xAI
+        chat-completions shape reports ``prompt_tokens``/``completion_tokens``,
+        and the mapping to the neutral ``(input, output)`` tuple belongs to this
+        adapter.
+        """
         usage = envelope.get("usage")
         if not isinstance(usage, Mapping):
             return None
@@ -744,12 +810,3 @@ class OpenAIAdvisorAdapter:
     def _price_for(self, model: str) -> ModelPrice:
         """The injected price, or the documented unknown-price fallback."""
         return self._pricing.get(model, UNKNOWN_PRICE)
-
-
-
-
-
-
-
-
-

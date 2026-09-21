@@ -64,6 +64,7 @@ from .orchestrator import (
     DEFAULT_REPORT_SCHEMA,
     DEFAULT_STEP_TIMEOUT,
     DEFAULT_TASK_INSTRUCTIONS,
+    HALTING_REASONS,
     LoopInvariantError,
     LoopStatus,
     Orchestrator,
@@ -94,6 +95,58 @@ from .plugin_core import (
     PluginError,
     PluginNotFoundError,
     PluginRegistry,
+)
+from .evidence_merger import (
+    AdvisorObservation,
+    EvidenceConflict,
+    EvidenceIdentityCollisionError,
+    EvidenceMergerError,
+    EvidenceRelation,
+    EvidenceView,
+    ObservationOutcome,
+    ObservationStatus,
+    merge_evidence,
+)
+from .decision_engine import (
+    DecisionEngineError,
+    DecisionResult,
+    decide_from_observations,
+    synthesize_decision,
+)
+from .judge import (
+    JudgeError,
+    JudgeJudgment,
+    JudgeRun,
+    JudgeUseCase,
+    build_judge_conflict,
+)
+from .reporting import (
+    REPORT_SCHEMA_VERSION,
+    ProjectMissingError,
+    ReportBuilder,
+    ReportingError,
+    ReportingInvariantError,
+    ReportSnapshot,
+)
+from .monitor import Monitor
+from .human_override import (
+    HumanOverride,
+    HumanOverrideError,
+    OverrideActorRequiredError,
+    OverrideInvariantError,
+    OverrideNoChangeError,
+    OverrideProjectNotFoundError,
+    OverrideReasonRequiredError,
+    OverrideStepNotFoundError,
+    OverrideTransitionError,
+)
+from .approval import (
+    ApprovalActorRequiredError,
+    ApprovalError,
+    ApprovalGate,
+    ApprovalReasonRequiredError,
+    ApprovalStepNotFoundError,
+    ApprovalTransitionError,
 )
 
 __all__ = [
@@ -159,6 +212,7 @@ __all__ = [
     "DEFAULT_STEP_TIMEOUT",
     "DEFAULT_TASK_INSTRUCTIONS",
     "DEFAULT_REPORT_SCHEMA",
+    "HALTING_REASONS",
     # scheduler
     "Scheduler",
     "SchedulerRun",
@@ -175,4 +229,50 @@ __all__ = [
     "ArchitectureEvolutionNotApprovedError",
     "EvolutionSummary",
     "LinkedChange",
+    # evidence merger + decision engine (Step 15)
+    "AdvisorObservation",
+    "ObservationStatus",
+    "EvidenceRelation",
+    "ObservationOutcome",
+    "EvidenceConflict",
+    "EvidenceView",
+    "EvidenceMergerError",
+    "EvidenceIdentityCollisionError",
+    "merge_evidence",
+    "DecisionResult",
+    "DecisionEngineError",
+    "synthesize_decision",
+    "decide_from_observations",
+    # judge use-case (Step 16)
+    "JudgeUseCase",
+    "JudgeRun",
+    "JudgeJudgment",
+    "JudgeError",
+    "build_judge_conflict",
+    # reporting projection (Step 18)
+    "ReportBuilder",
+    "ReportSnapshot",
+    "REPORT_SCHEMA_VERSION",
+    "ReportingError",
+    "ProjectMissingError",
+    "ReportingInvariantError",
+    # project monitor (Step 19)
+    "Monitor",
+    # human override (Step 20, controlled write)
+    "HumanOverride",
+    "HumanOverrideError",
+    "OverrideActorRequiredError",
+    "OverrideReasonRequiredError",
+    "OverrideProjectNotFoundError",
+    "OverrideStepNotFoundError",
+    "OverrideInvariantError",
+    "OverrideNoChangeError",
+    "OverrideTransitionError",
+    # human approval gate (Step 23, controlled write)
+    "ApprovalGate",
+    "ApprovalError",
+    "ApprovalActorRequiredError",
+    "ApprovalReasonRequiredError",
+    "ApprovalStepNotFoundError",
+    "ApprovalTransitionError",
 ]

@@ -2,12 +2,39 @@
 
 Three families live here: the SQLite persistence adapters (which are also the only
 code that imports :mod:`sqlite3`), the Cline file-channel worker adapter and the
-OpenAI advisor adapter. Nothing in ``domain``, ``ports`` or ``application``
-imports this package except the composition root and tests.
+consultative advisor adapters (OpenAI, Claude, Grok). Nothing in ``domain``,
+``ports`` or ``application`` imports this package except the composition root and
+tests.
+
+The private ``_http`` module holds the provider-neutral machinery the advisor
+adapters share (HTTP DTOs, ``urllib`` transport, transport error, retry
+classification, redaction, primitive validators, finding-id helper, price
+model). It is **not** part of the public surface: the names below that originate
+there are re-exported only because they were already public.
 """
 
 from __future__ import annotations
 
+from .claude import (
+    CLAUDE_API_KEY_ENV_VAR,
+    CLAUDE_API_VERSION,
+    CLAUDE_MESSAGES_URL,
+    CLAUDE_MODEL_ENV_VAR,
+    CLAUDE_PROVIDER,
+    CRITICAL_REVIEWER_ROLE,
+    DEFAULT_CLAUDE_MAX_OUTPUT_TOKENS,
+    DEFAULT_CLAUDE_MODEL,
+    ClaudeAdvisorAbstainError,
+    ClaudeAdvisorAdapter,
+    ClaudeAdvisorError,
+    ClaudeAdvisorHttpError,
+    ClaudeAdvisorInvalidResponseError,
+    ClaudeAdvisorRateLimitError,
+    ClaudeAdvisorTimeoutError,
+    ClaudeAdvisorTransportError,
+    ClaudeMissingApiKeyError,
+    resolve_claude_model,
+)
 from .cline import (
     DEFAULT_EXCHANGE_DIR,
     DEFAULT_PROTOCOL,
@@ -18,14 +45,41 @@ from .cline import (
     ReportParseError,
     TaskDispatchError,
 )
+from .cost import SqliteCostPlugin
+from .excel_reporting import SHEET_NAMES, ExcelReportingAdapter
+from .grok import (
+    CHALLENGER_ROLE,
+    DEFAULT_GROK_MAX_OUTPUT_TOKENS,
+    DEFAULT_GROK_MODEL,
+    GROK_CHAT_COMPLETIONS_URL,
+    GROK_MODEL_ENV_VAR,
+    GROK_PROVIDER,
+    XAI_API_KEY_ENV_VAR,
+    GrokAdvisorAbstainError,
+    GrokAdvisorAdapter,
+    GrokAdvisorError,
+    GrokAdvisorHttpError,
+    GrokAdvisorInvalidResponseError,
+    GrokAdvisorRateLimitError,
+    GrokAdvisorTimeoutError,
+    GrokAdvisorTransportError,
+    GrokMissingApiKeyError,
+    resolve_grok_model,
+)
+from .markdown_reporting import SECTION_NAMES, MarkdownReportingAdapter
 from .migrations import (
     AUDIT_TABLE_NAME,
     BOOTSTRAP_SCHEMA_SQL,
     CHANGE_REQUEST_TABLE_NAME,
+    COST_TABLE_NAME,
     MIGRATIONS,
     TABLE_NAMES,
     Migration,
 )
+# The provider-neutral transport/price/validator names below are re-exported
+# through ``.openai`` (their Step 12 public path) although they now live in the
+# private ``._http`` module. Re-exporting them here keeps this package's public
+# surface - and therefore ``__all__`` - exactly what it was before the extraction.
 from .openai import (
     ABSTAIN_REASON_FALLBACK,
     DEFAULT_BACKOFF_SCHEDULE,
@@ -52,6 +106,15 @@ from .openai import (
     OpenAIAdvisorTimeoutError,
     OpenAIAdvisorTransportError,
     urllib_transport,
+)
+from .openai_judge import (
+    DEFAULT_JUDGE_MAX_OUTPUT_TOKENS,
+    DEFAULT_OPENAI_JUDGE_MODEL,
+    EVIDENCE_JUDGE_ROLE,
+    OPENAI_JUDGE_FALLBACK_TARGET,
+    OPENAI_JUDGE_MODEL_ENV_VAR,
+    OpenAIJudgeAdapter,
+    resolve_openai_judge_model,
 )
 from .repositories import (
     SqliteADRRepository,
@@ -91,8 +154,16 @@ __all__ = [
     "TABLE_NAMES",
     "AUDIT_TABLE_NAME",
     "CHANGE_REQUEST_TABLE_NAME",
+    "COST_TABLE_NAME",
     # adapters
     "SqliteStorage",
+    "SqliteCostPlugin",
+    # Excel reporting adapter (Step 18)
+    "ExcelReportingAdapter",
+    "SHEET_NAMES",
+    # Markdown reporting adapter (Step 21)
+    "MarkdownReportingAdapter",
+    "SECTION_NAMES",
     "SqliteProjectRepository",
     "SqliteStepRepository",
     "SqliteTaskRepository",
@@ -138,4 +209,49 @@ __all__ = [
     "ABSTAIN_REASON_FALLBACK",
     "OPENAI_CHAT_COMPLETIONS_URL",
     "OPENAI_API_KEY_ENV_VAR",
+    # Claude advisor adapter (Step 13)
+    "ClaudeAdvisorAdapter",
+    "ClaudeAdvisorError",
+    "ClaudeMissingApiKeyError",
+    "ClaudeAdvisorTransportError",
+    "ClaudeAdvisorTimeoutError",
+    "ClaudeAdvisorRateLimitError",
+    "ClaudeAdvisorHttpError",
+    "ClaudeAdvisorInvalidResponseError",
+    "ClaudeAdvisorAbstainError",
+    "CLAUDE_PROVIDER",
+    "CRITICAL_REVIEWER_ROLE",
+    "DEFAULT_CLAUDE_MODEL",
+    "CLAUDE_MODEL_ENV_VAR",
+    "CLAUDE_MESSAGES_URL",
+    "CLAUDE_API_KEY_ENV_VAR",
+    "CLAUDE_API_VERSION",
+    "DEFAULT_CLAUDE_MAX_OUTPUT_TOKENS",
+    "resolve_claude_model",
+    # Grok advisor adapter (Step 14)
+    "GrokAdvisorAdapter",
+    "GrokAdvisorError",
+    "GrokMissingApiKeyError",
+    "GrokAdvisorTransportError",
+    "GrokAdvisorTimeoutError",
+    "GrokAdvisorRateLimitError",
+    "GrokAdvisorHttpError",
+    "GrokAdvisorInvalidResponseError",
+    "GrokAdvisorAbstainError",
+    "GROK_PROVIDER",
+    "CHALLENGER_ROLE",
+    "DEFAULT_GROK_MODEL",
+    "GROK_MODEL_ENV_VAR",
+    "GROK_CHAT_COMPLETIONS_URL",
+    "XAI_API_KEY_ENV_VAR",
+    "DEFAULT_GROK_MAX_OUTPUT_TOKENS",
+    "resolve_grok_model",
+    # OpenAI judge adapter (Step 16)
+    "OpenAIJudgeAdapter",
+    "EVIDENCE_JUDGE_ROLE",
+    "DEFAULT_OPENAI_JUDGE_MODEL",
+    "OPENAI_JUDGE_MODEL_ENV_VAR",
+    "OPENAI_JUDGE_FALLBACK_TARGET",
+    "DEFAULT_JUDGE_MAX_OUTPUT_TOKENS",
+    "resolve_openai_judge_model",
 ]

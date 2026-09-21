@@ -28,6 +28,7 @@ __all__ = [
     "TABLE_NAMES",
     "AUDIT_TABLE_NAME",
     "CHANGE_REQUEST_TABLE_NAME",
+    "COST_TABLE_NAME",
 ]
 
 
@@ -190,10 +191,14 @@ AUDIT_TABLE_NAME = "audit_entries"
 #: Table created by migration v3 (architecture change requests).
 CHANGE_REQUEST_TABLE_NAME = "architecture_change_requests"
 
+#: Table created by migration v4 (idempotent cost accounting telemetry).
+COST_TABLE_NAME = "cost_records"
+
 #: All source-of-truth tables created by the migrations (excluding the
 #: ``schema_migrations`` bookkeeping table).
 TABLE_NAMES: tuple[str, ...] = (
-    _V1_TABLE_NAMES + (AUDIT_TABLE_NAME, CHANGE_REQUEST_TABLE_NAME)
+    _V1_TABLE_NAMES
+    + (AUDIT_TABLE_NAME, CHANGE_REQUEST_TABLE_NAME, COST_TABLE_NAME)
 )
 
 
@@ -278,6 +283,53 @@ def _migration_003_down(conn: sqlite3.Connection) -> None:
     conn.execute(f"DROP TABLE IF EXISTS {CHANGE_REQUEST_TABLE_NAME}")
 
 
+#: Cost accounting is *telemetry*, not domain state, so the table carries no
+#: foreign key to ``steps``: a billable provider call may legitimately happen
+#: before (or without) a persisted Step, and the existing schema rule is to add
+#: no speculative relations between aggregates.
+#:
+#: ``event_id`` is ``UNIQUE`` because it is the stable identity of one logical
+#: billable provider event - the database itself is the last backstop that makes
+#: ``record()`` idempotent, even if a caller forgets to look first.
+#:
+#: The only index is on ``created_at``: the one clearly justified query pattern
+#: is a time window ("today", "this month"). The remaining filters are low
+#: cardinality equality checks on a small telemetry table, so no further indexes
+#: and no analytics structures are introduced.
+_MIGRATION_004_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE cost_records (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id TEXT NOT NULL UNIQUE,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL DEFAULT '',
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        cost_usd REAL NOT NULL DEFAULT 0,
+        pricing_known INTEGER NOT NULL DEFAULT 0,
+        project TEXT,
+        step_no INTEGER,
+        created_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE INDEX idx_cost_records_created_at ON cost_records (created_at)
+    """,
+)
+
+
+def _migration_004_cost_records(conn: sqlite3.Connection) -> None:
+    """Create the idempotent cost accounting telemetry table."""
+    for statement in _MIGRATION_004_STATEMENTS:
+        conn.execute(statement)
+
+
+def _migration_004_down(conn: sqlite3.Connection) -> None:
+    """Drop the cost accounting telemetry table."""
+    conn.execute("DROP INDEX IF EXISTS idx_cost_records_created_at")
+    conn.execute(f"DROP TABLE IF EXISTS {COST_TABLE_NAME}")
+
+
 #: Ordered migration list. Versions must be unique and strictly increasing.
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(
@@ -297,6 +349,12 @@ MIGRATIONS: tuple[Migration, ...] = (
         name="architecture_change_requests",
         up=_migration_003_architecture_change_requests,
         down=_migration_003_down,
+    ),
+    Migration(
+        version=4,
+        name="cost_records",
+        up=_migration_004_cost_records,
+        down=_migration_004_down,
     ),
 )
 

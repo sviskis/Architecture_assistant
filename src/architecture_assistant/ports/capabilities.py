@@ -28,6 +28,8 @@ __all__ = [
     "CostRecord",
     "CostQuery",
     "CostSummary",
+    "CostIdentityConflictError",
+    "CostIdentityUnavailableError",
     "Notification",
     "WorkerPort",
     "WorkerChannelPort",
@@ -259,19 +261,36 @@ class JudgeConflict:
 
 @dataclass(frozen=True)
 class CostRecord:
-    """One recorded cost entry."""
+    """One recorded cost event.
+
+    ``event_id`` is the **stable identity of one logical billable provider
+    event**, and it is what makes cost recording idempotent. Adapters build it
+    from the provider-native response id (``f"{provider}:{response_id}"``), so
+    replaying the same logical provider result is recognised as the same event
+    instead of being counted twice, while two genuine calls remain two events.
+    It is deliberately never derived from the clock and never from token counts
+    or cost, because two legitimate calls may share all of those.
+
+    ``pricing_known`` separates "this figure rests on a configured price" from
+    "no price was available". A record with ``pricing_known=False`` carries the
+    documented ``cost_usd = 0.0`` of an *unknown*, so a summary can never
+    silently present it as a real zero-dollar cost.
+    """
 
     provider: str
+    event_id: str
     model: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
     cost_usd: float = 0.0
+    pricing_known: bool = False
     project: Optional[str] = None
     step_no: Optional[int] = None
     created_at: datetime = field(default_factory=utc_now)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "provider", _text(self.provider, "provider"))
+        object.__setattr__(self, "event_id", _text(self.event_id, "event_id"))
         object.__setattr__(self, "model", self.model or "")
         object.__setattr__(
             self, "input_tokens", _count(self.input_tokens, "input_tokens")
@@ -282,6 +301,10 @@ class CostRecord:
         object.__setattr__(
             self, "cost_usd", _money(self.cost_usd, "cost_usd")
         )
+        if not isinstance(self.pricing_known, bool):
+            raise ValueError(
+                f"pricing_known must be a bool; got {self.pricing_known!r}"
+            )
         object.__setattr__(
             self, "project", _optional_text(self.project, "project")
         )
@@ -296,10 +319,12 @@ class CostRecord:
         """Deterministic, JSON-safe representation."""
         return {
             "provider": self.provider,
+            "event_id": self.event_id,
             "model": self.model,
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
             "cost_usd": self.cost_usd,
+            "pricing_known": self.pricing_known,
             "project": self.project,
             "step_no": self.step_no,
             "created_at": self.created_at.isoformat(),
@@ -380,12 +405,22 @@ class CostQuery:
 
 @dataclass(frozen=True)
 class CostSummary:
-    """Aggregated result of a :class:`CostQuery`."""
+    """Aggregated result of a :class:`CostQuery`.
+
+    ``total_usd`` is the sum of every matched record's ``cost_usd`` - a record
+    with ``pricing_known=False`` contributes its documented ``0.0`` - while
+    ``priced_record_count`` and ``unpriced_record_count`` partition
+    ``record_count``. A reader therefore always sees how much of the figure
+    rests on a configured price and how much of it is simply unknown; an
+    unpriced record is never silently presented as a known zero-dollar cost.
+    """
 
     total_usd: float = 0.0
     input_tokens: int = 0
     output_tokens: int = 0
     record_count: int = 0
+    priced_record_count: int = 0
+    unpriced_record_count: int = 0
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -400,6 +435,25 @@ class CostSummary:
         object.__setattr__(
             self, "record_count", _count(self.record_count, "record_count")
         )
+        object.__setattr__(
+            self,
+            "priced_record_count",
+            _count(self.priced_record_count, "priced_record_count"),
+        )
+        object.__setattr__(
+            self,
+            "unpriced_record_count",
+            _count(self.unpriced_record_count, "unpriced_record_count"),
+        )
+        if (
+            self.priced_record_count + self.unpriced_record_count
+            != self.record_count
+        ):
+            raise ValueError(
+                "priced_record_count + unpriced_record_count must equal "
+                f"record_count; got {self.priced_record_count} + "
+                f"{self.unpriced_record_count} != {self.record_count}"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         """Deterministic, JSON-safe representation."""
@@ -408,7 +462,30 @@ class CostSummary:
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
             "record_count": self.record_count,
+            "priced_record_count": self.priced_record_count,
+            "unpriced_record_count": self.unpriced_record_count,
         }
+
+
+class CostIdentityConflictError(Exception):
+    """One ``event_id`` was re-used for *different* accounting content.
+
+    Raised by a cost adapter when :meth:`CostPort.record` receives an
+    ``event_id`` that is already stored but whose accounting content differs.
+    The ledger fails closed: overwriting would silently lose one version and
+    storing both would charge one logical event twice.
+    """
+
+
+class CostIdentityUnavailableError(Exception):
+    """A billable response carried no stable provider event identity.
+
+    Raised *inside* an adapter's telemetry path when a successful 2xx response
+    carries usable usage but no provider-native response id. Nothing is
+    persisted, because a fabricated or request-derived identity would either
+    collapse two genuine calls into one event or invent a billable event that
+    never happened.
+    """
 
 
 @dataclass(frozen=True)

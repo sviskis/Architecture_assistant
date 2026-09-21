@@ -29,18 +29,29 @@ class AuditEntityType(StrEnum):
     ``ADR`` and ``RISK`` are written by the Step 5 managers, ``STEP`` by the
     Step 9 orchestrator (exactly one entry per persisted Step transition) and
     ``ACR`` by the Step 11 architecture-evolution engine (one entry per
-    lifecycle transition). Each was added deliberately when its writer landed -
-    audit entries are never written for an entity kind that does not exist here.
+    lifecycle transition). ``PROJECT`` is written by the Step 20 human-override
+    use-case (one entry per human control of the project aggregate). Each was
+    added deliberately when its writer landed - audit entries are never written
+    for an entity kind that does not exist here.
     """
 
     ADR = "ADR"
     RISK = "RISK"
     STEP = "STEP"
     ACR = "ACR"
+    PROJECT = "PROJECT"
 
 
 class AuditAction(StrEnum):
-    """Canonical actions recorded by the managers."""
+    """Canonical actions recorded by the managers.
+
+    ``PAUSE``/``RESUME``/``SET_MODE`` are the project-control vocabulary of the
+    Step 20 human-override use-case and apply to ``AuditEntityType.PROJECT``
+    only. A **step** override deliberately adds no verb: the Step entity has
+    exactly one transition action (``UPDATE``), and the FSM event that was
+    applied is recorded in ``detail["event"]`` - so the human marker is
+    ``detail["actor"]``/``detail["operation"]``, never a duplicate verb.
+    """
 
     CREATE = "CREATE"
     ACCEPT = "ACCEPT"
@@ -52,6 +63,9 @@ class AuditAction(StrEnum):
     MITIGATE = "MITIGATE"
     CLOSE = "CLOSE"
     REOPEN = "REOPEN"
+    PAUSE = "PAUSE"
+    RESUME = "RESUME"
+    SET_MODE = "SET_MODE"
 
 
 def _as_enum(enum_cls: type, value: Any, field_name: str) -> Enum:

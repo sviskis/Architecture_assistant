@@ -28,6 +28,7 @@ from .evolution import (
     reconcile_declared_changes,
 )
 from .root import (
+    DEFAULT_REPORT_DIR,
     DEFAULT_SOURCE_ROOT,
     Composition,
     CompositionConfig,
@@ -40,6 +41,13 @@ from .realization import (
     VALIDATOR_SOURCE,
     ArchitectureRealizationAdapter,
 )
+from .evidence import (
+    ABSTAIN_ERRORS,
+    ADVISOR_ERRORS,
+    ABSTAIN_REASON_PREFIX,
+    ERROR_REASON_PREFIX,
+    observe,
+)
 
 __all__ = [
     "Composition",
@@ -49,6 +57,7 @@ __all__ = [
     "baseline_v1_1",
     "canonical_baseline",
     "DEFAULT_SOURCE_ROOT",
+    "DEFAULT_REPORT_DIR",
     "ArchitectureRealizationAdapter",
     "VALIDATOR_SOURCE",
     # declared architecture changes (Step 11)
@@ -64,4 +73,10 @@ __all__ = [
     "declared_risks",
     "build_evolution",
     "reconcile_declared_changes",
+    # advisor observation seam (Step 15)
+    "observe",
+    "ABSTAIN_ERRORS",
+    "ADVISOR_ERRORS",
+    "ABSTAIN_REASON_PREFIX",
+    "ERROR_REASON_PREFIX",
 ]

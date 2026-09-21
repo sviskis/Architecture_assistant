@@ -11,6 +11,8 @@ from .capabilities import (
     AdvisorPort,
     AdvisorQuery,
     CanonicalBaseline,
+    CostIdentityConflictError,
+    CostIdentityUnavailableError,
     CostPort,
     CostQuery,
     CostRecord,
@@ -84,5 +86,7 @@ __all__ = [
     "CostRecord",
     "CostQuery",
     "CostSummary",
+    "CostIdentityConflictError",
+    "CostIdentityUnavailableError",
     "Notification",
 ]

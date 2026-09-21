@@ -73,6 +73,7 @@ from architecture_assistant.infrastructure import (
 from architecture_assistant.ports.capabilities import (
     AdvisorPort,
     AdvisorQuery,
+    CostIdentityUnavailableError,
     CostPort,
     CostQuery,
     CostRecord,
@@ -783,15 +784,71 @@ class TestCostTelemetry:
         assert len(sink.records) == 1
         cost = sink.records[0]
         assert cost.provider == "openai"
+        # the provider-native response id is the stable event identity
+        assert cost.event_id == "openai:chatcmpl-test"
         assert cost.model == DEFAULT_OPENAI_MODEL
         assert cost.input_tokens == 120
         assert cost.output_tokens == 30
         assert cost.cost_usd == round(
             (120 / 1000.0) * 0.5 + (30 / 1000.0) * 2.5, 6
         )
+        # a configured price means the figure is a known estimate
+        assert cost.pricing_known is True
         assert cost.project == "Architecture Lifecycle Assistant"
         assert cost.step_no == 12
         assert cost.created_at == FIXED
+
+    def test_a_response_without_a_provider_id_records_nothing(self) -> None:
+        """No stable provider identity -> no event, but the finding survives."""
+        reported: list[BaseException] = []
+        sink = RecordingCostSink()
+        payload = envelope(json.dumps(contract()))
+        payload.pop("id")
+        transport = FakeTransport([response(payload)])
+        advisor = make_advisor(
+            transport, cost_sink=sink, on_telemetry_error=reported.append
+        )
+
+        finding = advisor.advise(make_query())
+
+        assert finding.source == "openai"
+        assert finding.evidence
+        assert sink.records == []
+        assert isinstance(
+            advisor.last_telemetry_error, CostIdentityUnavailableError
+        )
+        assert reported == [advisor.last_telemetry_error]
+
+    @pytest.mark.parametrize("identity", ["", "   ", 17, None])
+    def test_an_unusable_provider_id_records_nothing(self, identity) -> None:
+        sink = RecordingCostSink()
+        payload = envelope(json.dumps(contract()))
+        payload["id"] = identity
+        transport = FakeTransport([response(payload)])
+
+        finding = make_advisor(transport, cost_sink=sink).advise(make_query())
+
+        assert finding.source == "openai"
+        assert sink.records == []
+
+    def test_the_event_identity_never_comes_from_the_clock_or_the_tokens(
+        self,
+    ) -> None:
+        """Two replays of one provider response share one event identity."""
+        sink = RecordingCostSink()
+        transport = FakeTransport([answer()])
+
+        make_advisor(transport, cost_sink=sink, clock=fixed_clock).advise(
+            make_query()
+        )
+        make_advisor(
+            transport, cost_sink=sink, clock=fixed_clock
+        ).advise(make_query())
+
+        assert [record.event_id for record in sink.records] == [
+            "openai:chatcmpl-test",
+            "openai:chatcmpl-test",
+        ]
 
     def test_pricing_is_injected_and_never_hardcoded(self) -> None:
         """No price table ships in the core: unknown means 0.0, documented."""
@@ -801,6 +858,9 @@ class TestCostTelemetry:
         make_advisor(cost_sink=sink).advise(make_query())
 
         assert sink.records[0].cost_usd == 0.0
+        # 0.0 here means "no price was configured", never "this call was free"
+        assert sink.records[0].pricing_known is False
+        assert sink.records[0].event_id == "openai:chatcmpl-test"
 
     def test_an_unknown_model_falls_back_to_the_documented_zero(self) -> None:
         sink = RecordingCostSink()
@@ -811,6 +871,7 @@ class TestCostTelemetry:
         advisor.advise(make_query())
 
         assert sink.records[0].cost_usd == 0.0
+        assert sink.records[0].pricing_known is False
         assert sink.records[0].model == "some-other-model"
 
     def test_a_failing_cost_sink_never_loses_the_finding(self) -> None:
@@ -1174,11 +1235,21 @@ class TestLayerBoundaries:
 
     def test_no_api_key_is_committed_anywhere(self) -> None:
         root = Path(__file__).resolve().parents[1]
-        module = Path(urllib_transport.__code__.co_filename)
-        text = module.read_text(encoding="utf-8")
+        # Step 13 moved the provider-neutral transport into the private
+        # ``.._http`` module, so the OpenAI secret handling must be scanned on
+        # the adapter module itself - and the shared module must stay clean too.
+        adapter_module = Path(
+            OpenAIAdvisorAdapter.__init__.__code__.co_filename
+        )
+        text = adapter_module.read_text(encoding="utf-8")
         for pattern in ("sk-", "Bearer sk", "OPENAI_API_KEY =", 'api_key="sk'):
             assert pattern not in text, pattern
         assert "os.environ.get(OPENAI_API_KEY_ENV_VAR" in text
+        shared_module = Path(urllib_transport.__code__.co_filename)
+        assert shared_module != adapter_module
+        shared_text = shared_module.read_text(encoding="utf-8")
+        for pattern in ("sk-", "Bearer", "api_key"):
+            assert pattern not in shared_text, pattern
         assert root.is_dir()
 
     def test_no_third_party_dependency_is_declared(self) -> None:

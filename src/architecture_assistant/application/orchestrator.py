@@ -41,7 +41,6 @@ from ..domain.enums import (
     StepEvent,
     StepState,
     TaskEvent,
-    TaskState,
 )
 from ..domain.fsm import (
     InvalidTransitionError,
@@ -52,12 +51,12 @@ from ..domain.models import Project, Step, Task, utc_now
 from ..ports.capabilities import (
     RealizationControlPort,
     WorkerChannelPort,
-    WorkerRequest,
     WorkerResult,
 )
 from ..ports.repositories import TaskKey
 from ..ports.storage import StoragePort
 from .context import ContextBuilder
+from .dispatch import publish_task
 from .loop_policy import ReviewOutcome, decide_review, requires_approval
 
 __all__ = [
@@ -69,6 +68,7 @@ __all__ = [
     "OrchestratorError",
     "LoopInvariantError",
     "Orchestrator",
+    "HALTING_REASONS",
 ]
 
 #: Conservative default deadline for a dispatched step. The composition root
@@ -164,7 +164,13 @@ class LoopInvariantError(OrchestratorError):
 
 #: Step states that halt the loop and keep the step current until a human acts,
 #: mapped to the exact reason the loop reports.
-_HALTING_REASONS: dict = {
+#:
+#: Public on purpose: this mapping is *the* definition of "this step is waiting
+#: for a human", so the read-only project monitor reports exactly this set
+#: instead of re-deciding what "blocking" means. ``REVISE`` and ``FAILED`` are
+#: deliberately absent - the loop resolves both itself (a retry while attempts
+#: remain, an escalation afterwards), so neither is a human blocker.
+HALTING_REASONS: dict = {
     StepState.WAITING_APPROVAL: "human-approval-required",
     StepState.BLOCKED: "human-unblock-required",
     StepState.CONFLICT: "human-conflict-resolution-required",
@@ -317,8 +323,8 @@ class Orchestrator:
             )
         if state is StepState.READY:
             return self._from_ready(step, project)
-        if state in _HALTING_REASONS:
-            return self._wait(step, _HALTING_REASONS[state])
+        if state in HALTING_REASONS:
+            return self._wait(step, HALTING_REASONS[state])
         if state is StepState.DISPATCHED:
             return self._collect(step, allow_start=True)
         if state is StepState.CLINE_WORKING:
@@ -354,35 +360,23 @@ class Orchestrator:
     def _dispatch(self, step: Step) -> TickResult:
         """Build the context, hand over the task, then record the dispatch.
 
-        The context comes from the injected :class:`ContextBuilder` (never from
-        an ad-hoc query), and it is published *before* the dispatch is persisted:
-        a crash in between simply re-dispatches the same, deterministic task file
-        for the same attempt (at-least-once), while a persisted dispatch can
-        never exist without its task.
+        The publication itself lives in :mod:`.dispatch` - the same helper the
+        explicit human approval uses - so the loop and the approval gate publish
+        identical, deterministic artifacts for the same attempt, and neither can
+        drift from the other. The artifacts are published *before* the dispatch
+        is persisted: a crash in between simply re-dispatches the same,
+        deterministic task file for the same attempt (at-least-once), while a
+        persisted dispatch can never exist without its task.
         """
         attempt = max(step.attempt, 1)
-        snapshot = self._context_builder.build(step.step_no)
-        task = Task(
-            step_no=step.step_no,
-            phase=step.phase,
-            title=step.title,
-            description=step.description,
-            risk=step.risk,
+        dispatched = publish_task(
+            self._worker,
+            self._context_builder,
+            step,
             attempt=attempt,
-            max_attempts=step.max_attempts,
-            state=TaskState.CREATED,
-            context_file=None,
             instructions=self._instructions,
             report_schema=self._report_schema,
-            created_at=self._clock(),
-        )
-        request = WorkerRequest(task=task, context=snapshot.to_dict())
-        self._worker.dispatch(request)
-        dispatched = replace(
-            task,
-            state=TaskStateMachine.from_task(task).next_state(
-                TaskEvent.DISPATCH
-            ),
+            now=self._clock(),
         )
         return self._transition(
             step,
