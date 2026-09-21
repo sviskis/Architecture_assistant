@@ -38,6 +38,8 @@ from .claude import (
 from .cline import (
     DEFAULT_EXCHANGE_DIR,
     DEFAULT_PROTOCOL,
+    DIRECTIVE_KIND,
+    DIRECTIVE_VERSION,
     ClineWorkerAdapter,
     ClineWorkerError,
     ReportMismatchError,
@@ -73,6 +75,8 @@ from .migrations import (
     CHANGE_REQUEST_TABLE_NAME,
     COST_TABLE_NAME,
     MIGRATIONS,
+    PROPOSAL_TABLE_NAME,
+    SUPERVISION_TABLE_NAME,
     TABLE_NAMES,
     Migration,
 )
@@ -119,6 +123,7 @@ from .openai_judge import (
 from .repositories import (
     SqliteADRRepository,
     SqliteArchitectureChangeRequestRepository,
+    SqliteArchitectureProposalRepository,
     SqliteArchitectureVersionRepository,
     SqliteAuditRepository,
     SqliteDecisionRepository,
@@ -126,7 +131,14 @@ from .repositories import (
     SqliteProjectRepository,
     SqliteRiskRepository,
     SqliteStepRepository,
+    SqliteSupervisionRepository,
     SqliteTaskRepository,
+)
+from .scripted_supervisor import (
+    DEFAULT_SCRIPTED_PROVIDER,
+    ScriptedSupervisor,
+    no_action,
+    scripted_result,
 )
 from .storage import SqliteStorage
 from .sqlite import (
@@ -155,6 +167,8 @@ __all__ = [
     "AUDIT_TABLE_NAME",
     "CHANGE_REQUEST_TABLE_NAME",
     "COST_TABLE_NAME",
+    "PROPOSAL_TABLE_NAME",
+    "SUPERVISION_TABLE_NAME",
     # adapters
     "SqliteStorage",
     "SqliteCostPlugin",
@@ -169,6 +183,8 @@ __all__ = [
     "SqliteTaskRepository",
     "SqliteArchitectureVersionRepository",
     "SqliteArchitectureChangeRequestRepository",
+    "SqliteArchitectureProposalRepository",
+    "SqliteSupervisionRepository",
     "SqliteADRRepository",
     "SqliteRiskRepository",
     "SqliteFindingRepository",
@@ -178,11 +194,18 @@ __all__ = [
     "ClineWorkerAdapter",
     "DEFAULT_EXCHANGE_DIR",
     "DEFAULT_PROTOCOL",
+    "DIRECTIVE_KIND",
+    "DIRECTIVE_VERSION",
     "ClineWorkerError",
     "TaskDispatchError",
     "ReportNotAvailableError",
     "ReportParseError",
     "ReportMismatchError",
+    # offline scripted supervisor (Step 28 Phase 1)
+    "ScriptedSupervisor",
+    "DEFAULT_SCRIPTED_PROVIDER",
+    "scripted_result",
+    "no_action",
     # OpenAI advisor adapter (Step 12)
     "OpenAIAdvisorAdapter",
     "OpenAIAdvisorError",

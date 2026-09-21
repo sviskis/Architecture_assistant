@@ -1,0 +1,118 @@
+{
+  "schema_version": "1.0",
+  "plan_version": "1.0",
+  "project": {
+    "name": "youtube_to_mp3",
+    "mode": "MANUAL"
+  },
+  "steps": [
+    {
+      "step_no": 1,
+      "phase": "CONTEXT",
+      "title": "Inspect the target project layout",
+      "description": "Read the existing youtube_to_mp3 repository: entry points, dependencies, existing tests. Write down what is already there before designing anything.",
+      "risk": "LOW",
+      "max_attempts": 3,
+      "requires_human": false
+    },
+    {
+      "step_no": 2,
+      "phase": "CONTEXT",
+      "title": "Record the command line contract",
+      "description": "Fix the CLI: input is one YouTube URL, output is a TXT transcript next to a working directory. No other behaviour is promised.",
+      "risk": "LOW",
+      "max_attempts": 3,
+      "requires_human": false
+    },
+    {
+      "step_no": 3,
+      "phase": "ARCHITECTURE",
+      "title": "Define the download pipeline",
+      "description": "Decide the stages: URL validation, audio download, audio preparation, transcription, TXT output. Each stage is a separate module with one responsibility.",
+      "risk": "MEDIUM",
+      "max_attempts": 3,
+      "requires_human": true
+    },
+    {
+      "step_no": 4,
+      "phase": "ARCHITECTURE",
+      "title": "Decide the audio format and the transcription input",
+      "description": "Pick the intermediate audio format and sample rate, and record why; the transcription stage must not care how the file was produced.",
+      "risk": "MEDIUM",
+      "max_attempts": 3,
+      "requires_human": false
+    },
+    {
+      "step_no": 5,
+      "phase": "CLINE",
+      "title": "Implement URL validation",
+      "description": "One function that accepts or rejects a URL, with tests for both outcomes and no network access in the test.",
+      "risk": "LOW",
+      "max_attempts": 3,
+      "requires_human": false
+    },
+    {
+      "step_no": 6,
+      "phase": "CLINE",
+      "title": "Implement the audio download stage",
+      "description": "Download the audio track of one URL into the working directory. A failure must be reported, never silently swallowed.",
+      "risk": "MEDIUM",
+      "max_attempts": 3,
+      "requires_human": false
+    },
+    {
+      "step_no": 7,
+      "phase": "CLINE",
+      "title": "Implement the audio preparation stage",
+      "description": "Convert the downloaded audio into the format the transcription stage expects, with a deterministic file name.",
+      "risk": "MEDIUM",
+      "max_attempts": 3,
+      "requires_human": false
+    },
+    {
+      "step_no": 8,
+      "phase": "CLINE",
+      "title": "Implement the transcription stage",
+      "description": "Transcribe the prepared audio into one text string. The transcript must be reproducible for the same input.",
+      "risk": "HIGH",
+      "max_attempts": 3,
+      "requires_human": true
+    },
+    {
+      "step_no": 9,
+      "phase": "EXPORT",
+      "title": "Write the TXT output",
+      "description": "Write the transcript to a TXT file next to the working directory and print its path. The TXT file is the deliverable of the pilot.",
+      "risk": "LOW",
+      "max_attempts": 3,
+      "requires_human": false
+    },
+    {
+      "step_no": 10,
+      "phase": "TEST",
+      "title": "Test the end-to-end pipeline on one URL",
+      "description": "One real URL from start to TXT output, asserting the file exists and is not empty.",
+      "risk": "MEDIUM",
+      "max_attempts": 3,
+      "requires_human": false
+    },
+    {
+      "step_no": 11,
+      "phase": "TEST",
+      "title": "Test the failure paths",
+      "description": "An invalid URL, an unreachable network and a missing output directory must each produce one clear error, not a crash.",
+      "risk": "MEDIUM",
+      "max_attempts": 3,
+      "requires_human": false
+    },
+    {
+      "step_no": 12,
+      "phase": "FINAL",
+      "title": "Review the pilot and hand it over",
+      "description": "Read the produced TXT file, confirm the pipeline does what this plan promised, and record what is deliberately out of scope.",
+      "risk": "LOW",
+      "max_attempts": 3,
+      "requires_human": true
+    }
+  ]
+}

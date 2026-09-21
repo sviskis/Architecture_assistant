@@ -16,7 +16,12 @@ from datetime import datetime
 from enum import Enum, StrEnum
 from typing import Any, Mapping, Optional, Protocol, runtime_checkable
 
-from ..domain.enums import ReportStatus, Severity
+from ..domain.enums import (
+    ReportStatus,
+    Severity,
+    SupervisorAction,
+    SupervisorRisk,
+)
 from ..domain.models import Decision, Finding, Task, utc_now
 
 __all__ = [
@@ -33,6 +38,7 @@ __all__ = [
     "Notification",
     "WorkerPort",
     "WorkerChannelPort",
+    "SupervisionChannelPort",
     "RealizationCheckPort",
     "RealizationCheckResult",
     "RealizationControlPort",
@@ -43,7 +49,23 @@ __all__ = [
     "CostPort",
     "ReportingPort",
     "NotifierPort",
+    "SynthesisQuery",
+    "SynthesisResult",
+    "SynthesisPort",
+    "MAX_SUPERVISOR_ITEMS",
+    "MAX_SUPERVISOR_TEXT",
+    "SupervisorContext",
+    "SupervisorResult",
+    "SupervisorPort",
+    "SupervisionVerdict",
+    "SupervisionGatePort",
 ]
+
+#: How many records one supervisor-context section may carry, and how long one
+#: supervisor-facing text may be. The context is a *bounded* fact sheet: a
+#: supervisor is never handed an unbounded log, a chat history or a file dump.
+MAX_SUPERVISOR_ITEMS = 32
+MAX_SUPERVISOR_TEXT = 4000
 
 
 class PluginCapability(StrEnum):
@@ -555,6 +577,46 @@ class WorkerChannelPort(Protocol):
 
 
 @runtime_checkable
+class SupervisionChannelPort(Protocol):
+    """The extra worker-channel seam **supervision** needs - and nothing else.
+
+    Deliberately a *separate* protocol rather than more methods on
+    :class:`WorkerChannelPort`: the loop only ever needs ``dispatch``,
+    ``read_report`` and ``acknowledge_report``, and widening that contract would
+    silently invalidate every existing channel implementation for a capability
+    the loop must not have.
+
+    What supervision adds is exactly two ideas:
+
+    * the **exact bytes** of the current report, because the supervision identity
+      is a SHA-256 over them - unparsed, unsanitized and not normalized;
+    * one **distinct directive artifact** in the same channel, published
+      at-least-once and identifiable by its own content, so a restart can tell
+      whether its publication happened without guessing.
+
+    An implementation must never return a temporary in-flight file as a report,
+    and must never publish a directive through a second exchange root: a directive
+    is another artifact of the one channel the worker already talks through.
+    """
+
+    def read_report_bytes(self, step_no: int, attempt: int) -> Optional[bytes]:
+        """The exact current report bytes, or ``None`` when none exists yet."""
+        ...
+
+    def publish_directive(
+        self, directive: Mapping[str, Any], *, step_no: int, attempt: int
+    ) -> Any:
+        """Publish one deterministic, identifiable directive artifact."""
+        ...
+
+    def read_directive(
+        self, step_no: int, attempt: int
+    ) -> Optional[Mapping[str, Any]]:
+        """Read the published directive artifact for one dispatch, or ``None``."""
+        ...
+
+
+@runtime_checkable
 class RealizationCheckPort(Protocol):
     """Runs the *deterministic* architecture check over the realized source.
 
@@ -761,3 +823,488 @@ class NotifierPort(Protocol):
 
     def notify(self, message: Notification) -> None: ...
 
+
+# ---------------------------------------------------------------------------
+# the optional synthesis seam (Step 27)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class SynthesisQuery:
+    """One provider-neutral request for a **managed-project** design.
+
+    The query carries only already-gathered, already-validated inputs: the
+    operator's requirement verbatim, the bounded evidence digest of one review
+    and the deterministic skeleton the application assembled. A synthesizer may
+    refine the skeleton - it may never rewrite the requirement, and it is handed
+    no storage port, repository, transaction or provider client.
+    """
+
+    project: str
+    requirement: str
+    review_id: str
+    architecture_version: Optional[str] = None
+    skeleton: Mapping[str, Any] = field(default_factory=dict)
+    digest: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "project", _text(self.project, "project"))
+        object.__setattr__(
+            self, "requirement", _text(self.requirement, "requirement")
+        )
+        object.__setattr__(
+            self, "review_id", _text(self.review_id, "review_id")
+        )
+        object.__setattr__(
+            self,
+            "architecture_version",
+            _optional_text(self.architecture_version, "architecture_version"),
+        )
+        object.__setattr__(self, "skeleton", _mapping(self.skeleton, "skeleton"))
+        object.__setattr__(self, "digest", _mapping(self.digest, "digest"))
+
+    def to_dict(self) -> dict[str, Any]:
+        """Deterministic, JSON-safe representation."""
+        return {
+            "project": self.project,
+            "requirement": self.requirement,
+            "review_id": self.review_id,
+            "architecture_version": self.architecture_version,
+            "skeleton": dict(self.skeleton),
+            "digest": dict(self.digest),
+        }
+
+
+@dataclass(frozen=True)
+class SynthesisResult:
+    """What a synthesizer answers: proposal sections plus its own provenance.
+
+    ``content`` is validated by the caller against the proposal contract before
+    anything is stored - a malformed answer is a failure, never a proposal.
+    """
+
+    source: str
+    content: Mapping[str, Any] = field(default_factory=dict)
+    cost: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "source", _text(self.source, "source"))
+        object.__setattr__(self, "content", _mapping(self.content, "content"))
+        object.__setattr__(self, "cost", _mapping(self.cost, "cost"))
+
+    def to_dict(self) -> dict[str, Any]:
+        """Deterministic, JSON-safe representation."""
+        return {
+            "source": self.source,
+            "content": dict(self.content),
+            "cost": dict(self.cost),
+        }
+
+
+@runtime_checkable
+class SynthesisPort(Protocol):
+    """Turns gathered evidence into managed-project design content.
+
+    Provider-neutral and **optional**: the deterministic organizer is the default
+    and is always available, so the assistant can produce and approve a proposal
+    with no provider configured at all. An implementation must
+
+    * echo ``query.requirement`` verbatim and never rewrite it;
+    * return only JSON-safe content, because a malformed answer is refused;
+    * never mutate the managed project's state - it receives no storage port.
+    """
+
+    def synthesize(self, query: SynthesisQuery) -> SynthesisResult: ...
+
+
+# ---------------------------------------------------------------------------
+# supervision (Step 28 Phase 1) - advisory analysis of one worker report
+# ---------------------------------------------------------------------------
+
+def _bounded_text_list(value: Any, field_name: str) -> tuple[str, ...]:
+    """A bounded sequence of non-empty strings - the supervisor's one shape."""
+    items = _text_tuple(value, field_name)
+    if len(items) > MAX_SUPERVISOR_ITEMS:
+        raise ValueError(
+            f"{field_name} must carry at most {MAX_SUPERVISOR_ITEMS} entries; "
+            f"got {len(items)}"
+        )
+    for item in items:
+        if len(item) > MAX_SUPERVISOR_TEXT:
+            raise ValueError(
+                f"{field_name} entries must be at most {MAX_SUPERVISOR_TEXT} "
+                f"characters; got {len(item)}"
+            )
+    return items
+
+
+def _bounded_records(
+    value: Any, field_name: str
+) -> tuple[Mapping[str, Any], ...]:
+    """A bounded sequence of JSON-safe structured records."""
+    if value is None:
+        return ()
+    if isinstance(value, (str, bytes)):
+        raise ValueError(
+            f"{field_name} must be a sequence of mappings, not a bare string"
+        )
+    records = tuple(value)
+    if len(records) > MAX_SUPERVISOR_ITEMS:
+        raise ValueError(
+            f"{field_name} must carry at most {MAX_SUPERVISOR_ITEMS} records; "
+            f"got {len(records)}"
+        )
+    for record in records:
+        if not isinstance(record, Mapping):
+            raise ValueError(
+                f"{field_name} entries must be mappings; got {record!r}"
+            )
+    return records
+
+
+@dataclass(frozen=True)
+class SupervisorContext:
+    """The **persisted facts** one supervision analysis may see - and nothing else.
+
+    This is the fact half of the contract: everything here is already durable,
+    already bounded and already sanitized by the assistant. The supervisor's
+    answer is the *inference* half (:class:`SupervisorResult`), and it is never
+    allowed to masquerade as fact.
+
+    Deliberately **absent**: raw chat history of any kind, unbounded logs,
+    secrets, API keys and Authorization headers. A supervisor sees the current
+    report, the task it answered, the workflow state around it and the bounded
+    architecture context - never a transcript, never a credential and never the
+    whole repository.
+    """
+
+    project: str
+    step_no: int
+    attempt: int
+    max_attempts: int
+    step_state: str
+    mode: str
+    paused: bool
+    architecture_version: str
+    source_report_hash: str
+    task_title: str = ""
+    task_description: str = ""
+    task_instructions: Mapping[str, Any] = field(default_factory=dict)
+    report_status: str = ""
+    report_summary: str = ""
+    report: Mapping[str, Any] = field(default_factory=dict)
+    report_files_created: tuple[str, ...] = ()
+    report_files_changed: tuple[str, ...] = ()
+    report_files_deleted: tuple[str, ...] = ()
+    report_tests: Mapping[str, Any] = field(default_factory=dict)
+    worker_issues: tuple[str, ...] = ()
+    worker_architecture_questions: tuple[str, ...] = ()
+    worker_dependencies_added: tuple[str, ...] = ()
+    deterministic_findings: tuple[Mapping[str, Any], ...] = ()
+    accepted_adrs: tuple[Mapping[str, Any], ...] = ()
+    open_risks: tuple[Mapping[str, Any], ...] = ()
+    open_change_requests: tuple[Mapping[str, Any], ...] = ()
+    operator_constraints: tuple[str, ...] = ()
+    attempts_remaining: int = 0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "project", _text(self.project, "project"))
+        object.__setattr__(
+            self, "step_no", _optional_positive_int(self.step_no, "step_no")
+        )
+        object.__setattr__(
+            self, "attempt", _optional_positive_int(self.attempt, "attempt")
+        )
+        object.__setattr__(
+            self,
+            "max_attempts",
+            _optional_positive_int(self.max_attempts, "max_attempts"),
+        )
+        object.__setattr__(
+            self, "step_state", _text(self.step_state, "step_state")
+        )
+        object.__setattr__(self, "mode", _text(self.mode, "mode"))
+        if not isinstance(self.paused, bool):
+            raise ValueError(f"paused must be a bool; got {self.paused!r}")
+        object.__setattr__(
+            self,
+            "architecture_version",
+            _text(self.architecture_version, "architecture_version"),
+        )
+        object.__setattr__(
+            self,
+            "source_report_hash",
+            _text(self.source_report_hash, "source_report_hash"),
+        )
+        object.__setattr__(self, "task_title", self.task_title or "")
+        object.__setattr__(
+            self, "task_description", self.task_description or ""
+        )
+        object.__setattr__(
+            self,
+            "task_instructions",
+            _mapping(self.task_instructions, "task_instructions"),
+        )
+        object.__setattr__(self, "report_status", self.report_status or "")
+        object.__setattr__(self, "report_summary", self.report_summary or "")
+        object.__setattr__(self, "report", _mapping(self.report, "report"))
+        object.__setattr__(
+            self,
+            "report_files_created",
+            _bounded_text_list(
+                self.report_files_created, "report_files_created"
+            ),
+        )
+        object.__setattr__(
+            self,
+            "report_files_changed",
+            _bounded_text_list(
+                self.report_files_changed, "report_files_changed"
+            ),
+        )
+        object.__setattr__(
+            self,
+            "report_files_deleted",
+            _bounded_text_list(
+                self.report_files_deleted, "report_files_deleted"
+            ),
+        )
+        object.__setattr__(
+            self, "report_tests", _mapping(self.report_tests, "report_tests")
+        )
+        object.__setattr__(
+            self,
+            "worker_issues",
+            _bounded_text_list(self.worker_issues, "worker_issues"),
+        )
+        object.__setattr__(
+            self,
+            "worker_architecture_questions",
+            _bounded_text_list(
+                self.worker_architecture_questions,
+                "worker_architecture_questions",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "worker_dependencies_added",
+            _bounded_text_list(
+                self.worker_dependencies_added, "worker_dependencies_added"
+            ),
+        )
+        for name in (
+            "deterministic_findings",
+            "accepted_adrs",
+            "open_risks",
+            "open_change_requests",
+        ):
+            object.__setattr__(
+                self, name, _bounded_records(getattr(self, name), name)
+            )
+        object.__setattr__(
+            self,
+            "operator_constraints",
+            _bounded_text_list(
+                self.operator_constraints, "operator_constraints"
+            ),
+        )
+        object.__setattr__(
+            self,
+            "attempts_remaining",
+            _count(self.attempts_remaining, "attempts_remaining"),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Deterministic, JSON-safe representation."""
+        return {
+            "project": self.project,
+            "step_no": self.step_no,
+            "attempt": self.attempt,
+            "max_attempts": self.max_attempts,
+            "attempts_remaining": self.attempts_remaining,
+            "step_state": self.step_state,
+            "mode": self.mode,
+            "paused": self.paused,
+            "architecture_version": self.architecture_version,
+            "source_report_hash": self.source_report_hash,
+            "task_title": self.task_title,
+            "task_description": self.task_description,
+            "task_instructions": dict(self.task_instructions),
+            "report_status": self.report_status,
+            "report_summary": self.report_summary,
+            "report": dict(self.report),
+            "report_files_created": list(self.report_files_created),
+            "report_files_changed": list(self.report_files_changed),
+            "report_files_deleted": list(self.report_files_deleted),
+            "report_tests": dict(self.report_tests),
+            "worker_issues": list(self.worker_issues),
+            "worker_architecture_questions": list(
+                self.worker_architecture_questions
+            ),
+            "worker_dependencies_added": list(self.worker_dependencies_added),
+            "deterministic_findings": [
+                dict(item) for item in self.deterministic_findings
+            ],
+            "accepted_adrs": [dict(item) for item in self.accepted_adrs],
+            "open_risks": [dict(item) for item in self.open_risks],
+            "open_change_requests": [
+                dict(item) for item in self.open_change_requests
+            ],
+            "operator_constraints": list(self.operator_constraints),
+        }
+
+
+@dataclass(frozen=True)
+class SupervisorResult:
+    """The **inference** half: what a supervisor recommends, never what happens.
+
+    ``action``, ``reason``, ``risk``, ``instruction_for_cline`` and
+    ``requires_human`` are advisory. The application validates them, derives the
+    send class itself (never trusting ``risk`` alone) and owns every mutation - a
+    supervisor receives no storage port, no transaction boundary, no worker
+    channel and no FSM, so it *cannot* set ``VERIFIED``, move a Step, increment an
+    attempt or ACK a report even if it wanted to.
+
+    ``evidence`` is bounded, sanitized provenance (file references, test ids),
+    never a provider transcript.
+    """
+
+    action: SupervisorAction
+    reason: str
+    risk: SupervisorRisk = SupervisorRisk.HIGH
+    instruction_for_cline: str = ""
+    requires_human: bool = False
+    evidence: tuple[str, ...] = ()
+    provider: str = "supervisor"
+    cost: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "action", _enum(SupervisorAction, self.action, "action")
+        )
+        object.__setattr__(self, "reason", _text(self.reason, "reason"))
+        object.__setattr__(
+            self, "risk", _enum(SupervisorRisk, self.risk, "risk")
+        )
+        object.__setattr__(
+            self, "instruction_for_cline", self.instruction_for_cline or ""
+        )
+        if not isinstance(self.requires_human, bool):
+            raise ValueError(
+                f"requires_human must be a bool; got {self.requires_human!r}"
+            )
+        if len(self.reason) > MAX_SUPERVISOR_TEXT:
+            raise ValueError(
+                f"reason must be at most {MAX_SUPERVISOR_TEXT} characters; "
+                f"got {len(self.reason)}"
+            )
+        if len(self.instruction_for_cline) > MAX_SUPERVISOR_TEXT:
+            raise ValueError(
+                "instruction_for_cline must be at most "
+                f"{MAX_SUPERVISOR_TEXT} characters; "
+                f"got {len(self.instruction_for_cline)}"
+            )
+        object.__setattr__(
+            self, "evidence", _bounded_text_list(self.evidence, "evidence")
+        )
+        object.__setattr__(
+            self, "provider", _text(self.provider, "provider")
+        )
+        object.__setattr__(self, "cost", _mapping(self.cost, "cost"))
+
+    @property
+    def cost_available(self) -> bool:
+        """Whether the answer carried cost telemetry at all."""
+        return bool(self.cost)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Deterministic, JSON-safe representation."""
+        return {
+            "action": self.action.value,
+            "reason": self.reason,
+            "risk": self.risk.value,
+            "instruction_for_cline": self.instruction_for_cline,
+            "requires_human": self.requires_human,
+            "evidence": list(self.evidence),
+            "provider": self.provider,
+            "cost": dict(self.cost),
+        }
+
+
+@runtime_checkable
+class SupervisorPort(Protocol):
+    """Analyses one worker report and recommends a directive.
+
+    Provider-neutral and **advisory**: the assistant remains authoritative, so an
+    implementation must
+
+    * be handed only a :class:`SupervisorContext` - persisted, bounded facts, no
+      chat history, no log dump, no secret;
+    * answer with a :class:`SupervisorResult` and nothing else;
+    * assume it may be asked again for the same context after a crash, so an
+      answer must not depend on being called exactly once;
+    * never mutate anything: it receives no storage, no transaction boundary, no
+      FSM and no worker channel.
+    """
+
+    def supervise(self, context: SupervisorContext) -> SupervisorResult: ...
+
+
+@dataclass(frozen=True)
+class SupervisionVerdict:
+    """Fail-closed answer to one question: may this report be reviewed?
+
+    ``allowed`` is ``False`` for every status except the three allowing ones -
+    **and for a missing record** - so the gate never has to guess. ``status`` and
+    ``supervision_id`` are carried for traceability only: the orchestrator never
+    branches on them, it only obeys ``allowed``.
+    """
+
+    allowed: bool
+    status: Optional[str]
+    supervision_id: Optional[str]
+    reason: str
+    source_report_hash: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.allowed, bool):
+            raise ValueError(f"allowed must be a bool; got {self.allowed!r}")
+        object.__setattr__(
+            self, "status", _optional_text(self.status, "status")
+        )
+        object.__setattr__(
+            self,
+            "supervision_id",
+            _optional_text(self.supervision_id, "supervision_id"),
+        )
+        object.__setattr__(self, "reason", _text(self.reason, "reason"))
+        object.__setattr__(
+            self,
+            "source_report_hash",
+            _optional_text(self.source_report_hash, "source_report_hash"),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Deterministic, JSON-safe representation."""
+        return {
+            "allowed": self.allowed,
+            "status": self.status,
+            "supervision_id": self.supervision_id,
+            "reason": self.reason,
+            "source_report_hash": self.source_report_hash,
+        }
+
+
+@runtime_checkable
+class SupervisionGatePort(Protocol):
+    """The narrow, read-only seam the authoritative loop consults.
+
+    Two methods, no writes: ``resolve`` answers whether the **current** report of
+    one step/attempt may proceed to authoritative review, and ``enabled`` reports
+    whether supervision is active at all. The orchestrator holds this instead of
+    the supervision use-case, so the loop can never send a directive, approve one
+    or read a supervisor's reasoning - it can only be blocked or allowed.
+    """
+
+    def enabled(self) -> bool: ...
+
+    def resolve(self, step_no: int, attempt: int) -> SupervisionVerdict: ...

@@ -25,10 +25,22 @@ from typing import Any, Callable, Optional, Union
 
 from ..application import (
     DEFAULT_MAX_ITERATIONS,
+    DEFAULT_MALFORMED_STABILITY,
+    DEFAULT_MALFORMED_TIMEOUT,
+    DEFAULT_POLL_INTERVAL_SECONDS,
+    DEFAULT_REVIEW_QUESTION,
     DEFAULT_STEP_TIMEOUT,
+    EVENT_LEVEL_ERROR,
+    EVENT_LEVEL_INFO,
+    EVENT_LEVEL_WARN,
+    EVENT_LEVELS,
+    LOG_COMPONENTS,
+    AdvisorReviewer,
     ApprovalGate,
     ArchitectureBootstrap,
     ArchitectureEvolution,
+    ArchitectureReview,
+    ArchitectureSynthesis,
     ArchitectureVersioning,
     BootstrapSummary,
     ContextBuilder,
@@ -39,11 +51,20 @@ from ..application import (
     Orchestrator,
     PROJECT_NAME,
     PROJECT_PLAN_VERSION,
+    PlanLoader,
+    ProposalApproval,
     RealizationControlUseCase,
     ReportBuilder,
     Scheduler,
     SchedulerRun,
+    Supervision,
+    SupervisionGate,
+    SupervisorRuntime,
     VersioningSummary,
+    build_event,
+    component_for,
+    exception_reason,
+    sanitize_text,
 )
 from ..architecture import ARCHITECTURE_CURRENT, ARCHITECTURE_V1, ARCHITECTURE_V1_1
 from ..domain.enums import Mode
@@ -59,6 +80,7 @@ from ..infrastructure import (
     MarkdownReportingAdapter,
     OpenAIAdvisorAdapter,
     OpenAIJudgeAdapter,
+    ScriptedSupervisor,
     SqliteCostPlugin,
     SqliteStorage,
     close_database,
@@ -76,6 +98,7 @@ from .evolution import (
     canonical_versions,
     reconcile_declared_changes,
 )
+from .evidence import observe
 from .realization import ArchitectureRealizationAdapter
 
 __all__ = [
@@ -83,6 +106,16 @@ __all__ = [
     "Composition",
     "DEFAULT_SOURCE_ROOT",
     "DEFAULT_REPORT_DIR",
+    "DEFAULT_REVIEW_QUESTION",
+    "EVENT_LEVELS",
+    "EVENT_LEVEL_INFO",
+    "EVENT_LEVEL_WARN",
+    "EVENT_LEVEL_ERROR",
+    "LOG_COMPONENTS",
+    "build_event",
+    "component_for",
+    "exception_reason",
+    "sanitize_text",
     "baseline_v1",
     "baseline_v1_1",
     "canonical_baseline",
@@ -145,12 +178,55 @@ class CompositionConfig:
     #: The source tree the realization gate inspects (injected, never assumed).
     source_root: Union[str, Path] = DEFAULT_SOURCE_ROOT
     clock: Callable[[], datetime] = utc_now
+    #: Whether advisory supervision gates the authoritative review at all. Off by
+    #: default: with supervision disabled the loop is byte-for-byte the Step 27
+    #: loop, and an operator turns it on deliberately.
+    supervision: bool = False
+    #: How often a host should tick the supervision runtime (Phase 18: ~2s).
+    supervisor_poll_interval: float = DEFAULT_POLL_INTERVAL_SECONDS
+    #: Malformed-report thresholds: how long the *same* malformed bytes must
+    #: persist, and how long malformed bytes may keep changing, before the record
+    #: escalates to an operator. Both are persisted, so both survive a restart.
+    malformed_stability: timedelta = DEFAULT_MALFORMED_STABILITY
+    malformed_timeout: timedelta = DEFAULT_MALFORMED_TIMEOUT
+    #: Bounded operator constraints handed to a supervisor as **facts** (never a
+    #: chat history, never a secret). Empty by default.
+    operator_constraints: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not callable(self.clock):
             raise ValueError("clock must be a callable returning a datetime")
         if not isinstance(self.mode, Mode):
             raise ValueError(f"mode must be a Mode; got {self.mode!r}")
+        if not isinstance(self.supervision, bool):
+            raise ValueError(
+                f"supervision must be a bool; got {self.supervision!r}"
+            )
+        if (
+            isinstance(self.supervisor_poll_interval, bool)
+            or not isinstance(self.supervisor_poll_interval, (int, float))
+            or self.supervisor_poll_interval <= 0
+        ):
+            raise ValueError(
+                "supervisor_poll_interval must be a positive number; got "
+                f"{self.supervisor_poll_interval!r}"
+            )
+        for label, value in (
+            ("malformed_stability", self.malformed_stability),
+            ("malformed_timeout", self.malformed_timeout),
+        ):
+            if not isinstance(value, timedelta) or value <= timedelta(0):
+                raise ValueError(f"{label} must be a positive timedelta")
+        if self.malformed_stability > self.malformed_timeout:
+            raise ValueError(
+                "malformed_stability must not exceed malformed_timeout; got "
+                f"{self.malformed_stability} and {self.malformed_timeout}"
+            )
+        object.__setattr__(
+            self,
+            "operator_constraints",
+            tuple(str(item) for item in (self.operator_constraints or ())),
+        )
         object.__setattr__(self, "source_root", Path(self.source_root))
         object.__setattr__(self, "report_dir", Path(self.report_dir))
         if (
@@ -178,6 +254,15 @@ class CompositionConfig:
             "max_iterations": self.max_iterations,
             "source_root": str(self.source_root),
             "report_dir": str(self.report_dir),
+            "supervision": self.supervision,
+            "supervisor_poll_interval": self.supervisor_poll_interval,
+            "malformed_stability_seconds": (
+                self.malformed_stability.total_seconds()
+            ),
+            "malformed_timeout_seconds": (
+                self.malformed_timeout.total_seconds()
+            ),
+            "operator_constraints": list(self.operator_constraints),
         }
 
 
@@ -263,6 +348,68 @@ class Composition:
     #: a decision. Approval is deliberately **not** here - it is its own gate.
     human_override: HumanOverride
 
+    #: The controlled **initial plan import**: the only way a plan enters the
+    #: source of truth. It validates a plan file completely, refuses everything
+    #: it cannot vouch for (an already loaded plan, a different project identity,
+    #: a different plan version, any unknown field) and writes all steps plus
+    #: exactly one ``PLAN``/``IMPORT`` audit entry in one transaction. It cannot
+    #: create or rename the project, cannot repair invalid input and cannot set a
+    #: workflow state. It is handed no monitor, no reporting and no worker.
+    plan_loader: PlanLoader
+
+    #: The explicit, advisory **three-advisor architecture review**. It is handed
+    #: the three consultative advisors in a fixed order, the provider-neutral
+    #: observation seam, the judge use-case, the *read-only* realization check,
+    #: the cost query and the clock - and no storage, transaction, repository,
+    #: monitor, orchestrator or scheduler. One call runs one review: the advisors,
+    #: the evidence merger, the decision engine, the judge only for a structurally
+    #: valid conflict, and a JSON-safe result. It writes nothing, changes no
+    #: workflow state and can never reach ``VERIFIED``.
+    architecture_review: ArchitectureReview
+
+    #: The **managed-project** architecture proposal generator: the one path
+    #: from one advisory review to one durable, project-scoped design. It is
+    #: handed the proposal repository, the audit trail and the shared
+    #: transaction boundary - and, optionally, a provider-neutral
+    #: :class:`~architecture_assistant.ports.capabilities.SynthesisPort`. It is
+    #: deliberately handed **no** ``ArchitectureEvolution``,
+    #: ``ArchitectureVersioning``, ``ADRManager``, ``RiskManager`` or
+    #: realization port, so a proposal can never mutate the assistant's own
+    #: baseline, create an ACR, write an assistant ADR/risk/rule or reach the
+    #: deterministic gate.
+    architecture_synthesis: ArchitectureSynthesis
+
+    #: The **proposal approval** human write path - the three decisions a
+    #: managed-project proposal can receive (approve, reject, request a
+    #: revision). It holds three repository ports and the transaction boundary
+    #: and nothing else, so approving a managed project's design stays entirely
+    #: separate from the assistant's own architecture lifecycle.
+    proposal_approval: ProposalApproval
+
+    #: The **offline** supervisor: the scripted double that answers from a fixed
+    #: script and never touches a network, a key or a provider. Phase 1 wires this
+    #: one on purpose - the real Codex adapter arrives in Phase 2 behind the very
+    #: same ``SupervisorPort``, and until then supervision can be exercised
+    #: end-to-end with no provider at all.
+    supervisor: ScriptedSupervisor
+
+    #: The advisory supervision use-case. The only table it writes is
+    #: ``supervision_records`` and the only artifact it publishes is the directive
+    #: file of the one Cline channel: no Step, no attempt, no baseline, no ACR, no
+    #: ADR and no Risk is reachable from it.
+    supervision: Supervision
+
+    #: The fail-closed, read-only gate the orchestrator consults. It is handed to
+    #: the loop and to nobody else, so the loop can be blocked or allowed but never
+    #: redirected - and passing ``None`` to the loop is how "supervision disabled
+    #: means exactly the previous behaviour" is expressed in code.
+    supervision_gate: SupervisionGate
+
+    #: The headless supervision runtime. Built here (composition owns its
+    #: dependencies) and deliberately **not started**: whoever hosts the loop - the
+    #: GUI app or a test - decides when ticking begins. It owns no thread.
+    supervisor_runtime: SupervisorRuntime
+
     def run_until_idle(self) -> SchedulerRun:
         """Chain every immediate transition, then stop and report why."""
         return self.scheduler.run_until_idle()
@@ -344,6 +491,43 @@ def compose(config: Optional[CompositionConfig] = None) -> Composition:
         storage, realization_adapter, canonical=canonical_baseline()
     )
 
+    # 3b. Advisory supervision (Step 28 Phase 1). Two decisions are made here and
+    #     nowhere else.
+    #
+    #     First: **off by default**. With `supervision=False` the loop receives no
+    #     gate at all, so the authoritative workflow is exactly the Step 27
+    #     workflow - the same transitions, the same audits, the same ACKs.
+    #
+    #     Second: the supervisor is the **offline scripted double**. Constructing
+    #     it opens no connection and reads no key, so a deployment with no provider
+    #     still runs the whole lifecycle; the real Codex adapter will replace it
+    #     behind the same port without touching anything else. Whatever the answer,
+    #     the assistant stays authoritative: the supervisor holds no storage, no
+    #     FSM and no gate.
+    supervision_gate = SupervisionGate(
+        storage,
+        worker,
+        architecture_version=ARCHITECTURE_CURRENT.version,
+        enabled=resolved.supervision,
+        clock=resolved.clock,
+    )
+    supervisor = ScriptedSupervisor()
+    supervision = Supervision(
+        storage,
+        worker,
+        supervisor,
+        supervision_gate,
+        operator_constraints=resolved.operator_constraints,
+        malformed_stability=resolved.malformed_stability,
+        malformed_timeout=resolved.malformed_timeout,
+    )
+    supervisor_runtime = SupervisorRuntime(
+        storage,
+        supervision,
+        interval=resolved.supervisor_poll_interval,
+        clock=resolved.clock,
+    )
+
     orchestrator = Orchestrator(
         storage,
         worker,
@@ -351,6 +535,7 @@ def compose(config: Optional[CompositionConfig] = None) -> Composition:
         realization_control=realization_control,
         clock=resolved.clock,
         timeout=resolved.timeout,
+        supervision=supervision_gate if resolved.supervision else None,
     )
     scheduler = Scheduler(
         orchestrator, max_iterations=resolved.max_iterations
@@ -464,6 +649,78 @@ def compose(config: Optional[CompositionConfig] = None) -> Composition:
         clock=resolved.clock,
     )
 
+    # 10. The controlled plan loader - the one way an initial plan enters the
+    #     source of truth. It is handed three repository ports and the shared
+    #     transaction boundary (the same least-power wiring as the human write
+    #     paths above) and no monitor, reporting, worker or architecture port: it
+    #     validates a plan file, imports it atomically or refuses, and can never
+    #     create, rename or otherwise touch the project identity.
+    plan_loader = PlanLoader(
+        storage.projects,
+        storage.steps,
+        storage.audit,
+        storage,
+        clock=resolved.clock,
+    )
+
+    # 11. The explicit, advisory architecture review. It is the **only** caller of
+    #     the advisory capabilities, and it is reachable only through an explicit
+    #     operator action - never from the loop, the gate or a decision. The
+    #     reviewers keep their configured order, and each relation is *explicit
+    #     metadata*: nothing is declared here, so nothing is inferred and no
+    #     evidence conflict can exist by default. The check is the read-only
+    #     realization adapter: it validates freshly and persists nothing, so the
+    #     review can report the deterministic verdict without ever writing it.
+    architecture_review = ArchitectureReview(
+        tuple(
+            AdvisorReviewer(source=advisor.provider, advisor=advisor)
+            for advisor in (openai_advisor, claude_advisor, grok_advisor)
+        ),
+        observer=observe,
+        source_root=resolved.source_root,
+        judge=judge_use_case,
+        check=realization_adapter,
+        cost_query=cost_plugin.query,
+        clock=resolved.clock,
+    )
+
+    # 12. The **managed-project** architecture proposal. Two facts decide its
+    #     shape. First, it is project-scoped: it produces a durable design for
+    #     the project this database manages and is *not* the assistant's own
+    #     baseline, so it is wired with the proposal repository, the audit trail
+    #     and the shared transaction boundary only. Second, it is deterministic
+    #     by default: no `SynthesisPort` is configured here, so the offline
+    #     organizer runs and a proposal can always be produced with no provider,
+    #     no key and no cost. A deployment that later adds a provider-neutral
+    #     synthesizer passes it as `synthesis=` - and the offline path stays the
+    #     fallback that never needs one.
+    #
+    #     Neither object below is handed `evolution`, `versioning` or the
+    #     realization control: an approved proposal can therefore never mutate
+    #     `ArchitectureVersion`, create an ACR, write an assistant ADR/risk/rule
+    #     or reach the deterministic gate. That separation is a wiring decision,
+    #     not a convention.
+    architecture_synthesis = ArchitectureSynthesis(
+        storage.proposals,
+        storage.audit,
+        storage,
+        clock=resolved.clock,
+    )
+
+    # 13. The proposal approval human write path. It owns exactly three
+    #     decisions on one persisted proposal (approve, reject, request a
+    #     revision) plus the staleness, fingerprint and project-identity checks
+    #     that make each of them safe: one status change and exactly one audit
+    #     entry per act, in one transaction, with an explicit actor and reason.
+    #     It is handed no monitor, no worker and no architecture port.
+    proposal_approval = ProposalApproval(
+        storage.proposals,
+        storage.projects,
+        storage.audit,
+        storage,
+        clock=resolved.clock,
+    )
+
     return Composition(
         config=resolved,
         connection=connection,
@@ -492,4 +749,12 @@ def compose(config: Optional[CompositionConfig] = None) -> Composition:
         monitor=monitor,
         approval=approval,
         human_override=human_override,
+        plan_loader=plan_loader,
+        architecture_review=architecture_review,
+        architecture_synthesis=architecture_synthesis,
+        proposal_approval=proposal_approval,
+        supervisor=supervisor,
+        supervision=supervision,
+        supervision_gate=supervision_gate,
+        supervisor_runtime=supervisor_runtime,
     )

@@ -30,9 +30,17 @@ class AuditEntityType(StrEnum):
     Step 9 orchestrator (exactly one entry per persisted Step transition) and
     ``ACR`` by the Step 11 architecture-evolution engine (one entry per
     lifecycle transition). ``PROJECT`` is written by the Step 20 human-override
-    use-case (one entry per human control of the project aggregate). Each was
-    added deliberately when its writer landed - audit entries are never written
-    for an entity kind that does not exist here.
+    use-case (one entry per human control of the project aggregate). ``PLAN`` is
+    written by the Step 25 plan loader (exactly one entry per imported plan, its
+    ``entity_id`` being the plan hash). ``PROPOSAL`` is written by the Step 27
+    managed-project architecture proposal use-cases (creation, approval,
+    rejection and revision request; its ``entity_id`` is the proposal id).
+    ``SUPERVISION`` is written by the Step 28 supervision use-case for the
+    **durable decisions only** (a directive approved, rejected, waived,
+    escalated or actually sent; its ``entity_id`` is the supervision id) - a
+    polling tick, a duplicate tick and a read-only status query are deliberately
+    never audited. Each was added deliberately when its writer landed - audit
+    entries are never written for an entity kind that does not exist here.
     """
 
     ADR = "ADR"
@@ -40,6 +48,9 @@ class AuditEntityType(StrEnum):
     STEP = "STEP"
     ACR = "ACR"
     PROJECT = "PROJECT"
+    PLAN = "PLAN"
+    PROPOSAL = "PROPOSAL"
+    SUPERVISION = "SUPERVISION"
 
 
 class AuditAction(StrEnum):
@@ -51,6 +62,14 @@ class AuditAction(StrEnum):
     exactly one transition action (``UPDATE``), and the FSM event that was
     applied is recorded in ``detail["event"]`` - so the human marker is
     ``detail["actor"]``/``detail["operation"]``, never a duplicate verb.
+    ``IMPORT`` is the Step 25 plan-loading verb and applies to
+    ``AuditEntityType.PLAN`` only: a plan is imported once, in one transaction,
+    and its steps are created rather than transitioned. A **proposal** decision
+    deliberately adds no verb either: ``CREATE`` records the proposal row,
+    ``UPDATE`` records approval and revision requests (carrying the operation,
+    the actor, the reason and the status it moved between in ``detail``) and
+    ``REJECT`` records the rejection - exactly like the ACR lifecycle records
+    its own transitions.
     """
 
     CREATE = "CREATE"
@@ -66,6 +85,7 @@ class AuditAction(StrEnum):
     PAUSE = "PAUSE"
     RESUME = "RESUME"
     SET_MODE = "SET_MODE"
+    IMPORT = "IMPORT"
 
 
 def _as_enum(enum_cls: type, value: Any, field_name: str) -> Enum:

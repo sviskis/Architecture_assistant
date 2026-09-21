@@ -50,6 +50,7 @@ from ..domain.fsm import (
 from ..domain.models import Project, Step, Task, utc_now
 from ..ports.capabilities import (
     RealizationControlPort,
+    SupervisionGatePort,
     WorkerChannelPort,
     WorkerResult,
 )
@@ -191,6 +192,7 @@ class Orchestrator:
         timeout: Optional[timedelta] = DEFAULT_STEP_TIMEOUT,
         instructions: Mapping[str, Any] = DEFAULT_TASK_INSTRUCTIONS,
         report_schema: Mapping[str, Any] = DEFAULT_REPORT_SCHEMA,
+        supervision: Optional[SupervisionGatePort] = None,
     ) -> None:
         if not callable(clock):
             raise ValueError("clock must be a callable returning a datetime")
@@ -226,12 +228,23 @@ class Orchestrator:
         self._timeout = timeout
         self._instructions = dict(instructions or {})
         self._report_schema = dict(report_schema or {})
+        # Optional and *read-only*: the loop may consult the supervision gate, but
+        # it can neither send a directive nor approve one - the gate it is handed
+        # exposes exactly two methods and writes nothing. ``None`` means
+        # supervision is disabled, which is the only state in which the loop skips
+        # the check entirely and behaves exactly as it did before Step 28.
+        self._supervision = supervision
 
     # -- read-only introspection -----------------------------------------
     @property
     def realization_control(self) -> RealizationControlPort:
         """The mandatory architecture gate of the loop."""
         return self._realization
+
+    @property
+    def supervision(self) -> Optional[SupervisionGatePort]:
+        """The advisory supervision gate, or ``None`` when supervision is off."""
+        return self._supervision
 
     @property
     def timeout(self) -> Optional[timedelta]:
@@ -330,6 +343,13 @@ class Orchestrator:
         if state is StepState.CLINE_WORKING:
             return self._collect(step, allow_start=False)
         if state is StepState.REPORT_RECEIVED:
+            # Gate A: a report may only start an authoritative review once
+            # supervision allows *that exact report*. The check reads the current
+            # report bytes, so it can never be satisfied by a decision taken for
+            # an earlier revision of the same attempt.
+            blocked = self._supervision_reason(step)
+            if blocked is not None:
+                return self._wait(step, blocked)
             return self._transition(
                 step, StepEvent.START_REVIEW, "review-started"
             )
@@ -421,6 +441,13 @@ class Orchestrator:
     def _review(self, step: Step) -> TickResult:
         """Decide the outcome, persist it, and only then acknowledge.
 
+        Gate B comes first and is mandatory: a step that reached ``REVIEWING``
+        without supervision - a seeded legacy state, a restart, a direct
+        ``run_once`` or a future call-order mistake - must not be able to reach
+        ``decide_review``, the realization gate, a workflow transition or the ACK
+        while the current report is unsupervised. When it blocks, the tick reports
+        ``WAITING`` and touches nothing at all.
+
         Re-reading the report here is deliberate: until the outcome is durable
         the report must stay on disk, so a crash between ``REPORT_RECEIVED`` and
         this tick is recoverable - the very same ``WorkerResult`` is read again.
@@ -431,6 +458,9 @@ class Orchestrator:
         transition are one transaction, so either all of it is durable or none
         of it is - and the report is acknowledged only afterwards.
         """
+        blocked = self._supervision_reason(step)
+        if blocked is not None:
+            return self._wait(step, blocked)
         report: Optional[WorkerResult] = self._worker.read_report(
             step.step_no, step.attempt
         )
@@ -476,6 +506,23 @@ class Orchestrator:
         # domain forbids once attempts are exhausted). The loop waits for a
         # human decision instead of inventing a transition that does not exist.
         return self._wait(step, "revise-attempts-exhausted")
+
+    def _supervision_reason(self, step: Step) -> Optional[str]:
+        """Why supervision blocks this report - or ``None`` when it does not.
+
+        ``None`` covers two safe cases on purpose: supervision is off (no gate was
+        injected, so the loop behaves exactly as it did before Step 28), or the
+        gate looked at the **current** report bytes of this step/attempt and
+        allowed it. The gate is the *only* thing consulted, and it is read-only -
+        the loop can be blocked or allowed, never redirected.
+        """
+        gate = self._supervision
+        if gate is None or not gate.enabled():
+            return None
+        verdict = gate.resolve(step.step_no, step.attempt)
+        if verdict.allowed:
+            return None
+        return verdict.reason
 
     def _wait(self, step: Step, reason: str) -> TickResult:
         """Report that the loop must not spin while an external event is due."""
@@ -623,5 +670,3 @@ class Orchestrator:
                 f"expected exactly one project, found {len(projects)}: {names}"
             )
         return projects[0]
-
-

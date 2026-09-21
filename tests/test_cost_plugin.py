@@ -206,7 +206,11 @@ class TestMigration:
         assert COST_TABLE_NAME in TABLE_NAMES
 
     def test_the_migration_is_versioned_and_idempotent(self, connection) -> None:
-        migration = MIGRATIONS[-1]
+        # selected by name, not by position: later steps append their own
+        # migrations and must not change what this test is about
+        migration = next(
+            item for item in MIGRATIONS if item.name == COST_TABLE_NAME
+        )
 
         assert migration.version == 4
         assert migration.name == "cost_records"
@@ -233,7 +237,9 @@ class TestMigration:
             )
 
     def test_the_migration_can_be_reversed(self, connection) -> None:
-        MIGRATIONS[-1].down(connection)
+        next(
+            item for item in MIGRATIONS if item.name == COST_TABLE_NAME
+        ).down(connection)
 
         names = {
             row["name"]

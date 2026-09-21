@@ -23,6 +23,13 @@ __all__ = [
     "ADRStatus",
     "RiskStatus",
     "DecisionStatus",
+    "ProposalStatus",
+    "SupervisorAction",
+    "SupervisorRisk",
+    "SupervisorStatus",
+    "SUPERVISION_BLOCKING_STATUSES",
+    "SUPERVISION_ALLOWING_STATUSES",
+    "SUPERVISION_RECONCILE_STATUSES",
 ]
 
 
@@ -185,3 +192,146 @@ class DecisionStatus(StrEnum):
     REJECTED = "REJECTED"
     ABSTAIN = "ABSTAIN"
     ERROR = "ERROR"
+
+
+class ProposalStatus(StrEnum):
+    """Lifecycle of a **managed-project** architecture proposal.
+
+    Deliberately *not* a baseline lifecycle: an
+    :class:`~architecture_assistant.domain.models.ArchitectureVersion` is the
+    architecture of the assistant itself (declared in code and enforced by the
+    deterministic validator), while a proposal describes a design for the
+    project the assistant manages. ``DRAFT`` is the entry state, ``APPROVED``
+    means a human accepted the design for the managed project, ``REJECTED`` is
+    terminal-negative, ``REVISION_REQUESTED`` asks for another proposal and
+    ``SUPERSEDED`` marks a proposal a newer revision replaced. History is never
+    rewritten: only the status of a row moves, its content is frozen.
+    """
+
+    DRAFT = "DRAFT"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    REVISION_REQUESTED = "REVISION_REQUESTED"
+    SUPERSEDED = "SUPERSEDED"
+
+
+class SupervisorAction(StrEnum):
+    """What a supervisor **recommends** for one worker report.
+
+    This is the supervisor's *inference*, never a workflow event: the assistant
+    owns the FSM, so no member of this enum can move a Step. ``RETRY`` asks the
+    worker to redo the work inside the **same** attempt - the authoritative
+    attempt counter is incremented only by the assistant's own RETRY path, never
+    by a supervisor. ``ESCALATE`` hands the decision to a human and
+    ``ERROR`` reports that the analysis itself failed.
+    """
+
+    NO_ACTION = "NO_ACTION"
+    REVISE = "REVISE"
+    CLARIFY = "CLARIFY"
+    RETRY = "RETRY"
+    ESCALATE = "ESCALATE"
+    ERROR = "ERROR"
+
+
+class SupervisorRisk(StrEnum):
+    """How much a supervisor's *inference* could affect the project.
+
+    Deliberately its own vocabulary rather than a reuse of
+    :class:`RiskLevel`: this is an advisory classification of one proposed
+    directive, not the registered risk of a Step. The application never trusts it
+    alone - the automatic-send policy re-derives the send class itself.
+    """
+
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+
+
+class SupervisorStatus(StrEnum):
+    """Lifecycle of one supervision identity (one exact report hash).
+
+    The identity is ``(project, step_no, attempt, source_report_hash,
+    architecture_version)``, so a rewritten report is a *new* record and the
+    decision taken for the previous bytes can never authorize the new ones.
+
+    ``SENT`` is deliberately **not** completion: it means "a directive has been
+    delivered to the worker and we are waiting for corrected evidence". Every
+    state except :data:`SUPERVISION_ALLOWING_STATUSES` blocks the authoritative
+    review, and a **missing row blocks as well** - the gate is fail-closed, so a
+    report nobody supervised can never drift into deterministic review.
+    """
+
+    #: A row exists and its analysis is owed; the record is written *before* the
+    #: supervisor is asked so a crash can never lose the fact that it was owed.
+    ANALYSIS_PENDING = "ANALYSIS_PENDING"
+    #: The analysis produced a directive that a human must approve before it is
+    #: sent (any mode), or that the automatic policy refused to send.
+    WAITING_HUMAN = "WAITING_HUMAN"
+    #: A directive is allowed to be sent automatically (mode + LOW-risk
+    #: allowlist) and has not been published yet.
+    READY_TO_SEND = "READY_TO_SEND"
+    #: The durable send intent is written; the artifact may or may not exist yet.
+    #: This is the only state a restart must reconcile.
+    SEND_PENDING = "SEND_PENDING"
+    #: The directive was published; the assistant now waits for **new** evidence.
+    #: Still blocking: the report this directive answered is not reviewable.
+    SENT = "SENT"
+    #: The report needs no directive - the gate allows the authoritative review.
+    NO_ACTION = "NO_ACTION"
+    #: The analysis itself failed (timeout, provider error, unusable answer).
+    ERROR = "ERROR"
+    #: A human must decide before anything else may happen.
+    ESCALATED = "ESCALATED"
+    #: The identity no longer matches the live project/step/attempt/baseline (or a
+    #: newer report superseded it): it must never be sent, and it still blocks.
+    STALE = "STALE"
+    #: The report bytes do not satisfy the worker-report contract. Recorded on
+    #: first sight - it blocks immediately and the supervisor is never called for
+    #: bytes it can never describe. The persisted first-seen timestamps decide
+    #: when the record escalates to the operator; nothing loops forever.
+    MALFORMED = "MALFORMED"
+    #: A human waived supervision for this **exact** report hash. Allows review.
+    WAIVED = "WAIVED"
+    #: A human rejected the directive for this **exact** report hash, explicitly.
+    #: Allows review - but only with a recorded actor and reason (the gate
+    #: re-checks that, so a REJECTED row can never appear without a human).
+    REJECTED = "REJECTED"
+
+
+#: Supervision statuses that **block** the authoritative review. The gate is a
+#: whitelist, so this set is documentation of the policy as much as a check: a
+#: status that is missing from :data:`SUPERVISION_ALLOWING_STATUSES` blocks even
+#: if it is not listed here, and a missing row blocks too.
+SUPERVISION_BLOCKING_STATUSES: frozenset = frozenset(
+    {
+        SupervisorStatus.ANALYSIS_PENDING,
+        SupervisorStatus.WAITING_HUMAN,
+        SupervisorStatus.READY_TO_SEND,
+        SupervisorStatus.SEND_PENDING,
+        SupervisorStatus.SENT,
+        SupervisorStatus.ERROR,
+        SupervisorStatus.ESCALATED,
+        SupervisorStatus.STALE,
+        SupervisorStatus.MALFORMED,
+    }
+)
+
+#: Supervision statuses that **allow** the authoritative review to proceed.
+SUPERVISION_ALLOWING_STATUSES: frozenset = frozenset(
+    {
+        SupervisorStatus.NO_ACTION,
+        SupervisorStatus.WAIVED,
+        SupervisorStatus.REJECTED,
+    }
+)
+
+#: The two statuses a restart must reconcile: an analysis that was owed when the
+#: process died, and a send intent whose publication may or may not have
+#: succeeded. Both are resolved from persisted state plus the exchange channel.
+SUPERVISION_RECONCILE_STATUSES: frozenset = frozenset(
+    {
+        SupervisorStatus.ANALYSIS_PENDING,
+        SupervisorStatus.SEND_PENDING,
+    }
+)

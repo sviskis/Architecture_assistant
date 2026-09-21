@@ -15,16 +15,23 @@ from dataclasses import dataclass
 from typing import Optional, Protocol, runtime_checkable
 
 from ..domain.audit import AuditEntityType, AuditEntry
-from ..domain.enums import ACRStatus, StepState
+from ..domain.enums import (
+    ACRStatus,
+    ProposalStatus,
+    StepState,
+    SupervisorStatus,
+)
 from ..domain.models import (
     ADR,
     ArchitectureChangeRequest,
+    ArchitectureProposal,
     ArchitectureVersion,
     Decision,
     Finding,
     Project,
     Risk,
     Step,
+    SupervisionRecord,
     Task,
 )
 
@@ -35,6 +42,8 @@ __all__ = [
     "TaskRepository",
     "ArchitectureVersionRepository",
     "ArchitectureChangeRequestRepository",
+    "ArchitectureProposalRepository",
+    "SupervisionRepository",
     "ADRRepository",
     "RiskRepository",
     "FindingRepository",
@@ -150,9 +159,96 @@ class ArchitectureChangeRequestRepository(Protocol):
 
 
 @runtime_checkable
+class ArchitectureProposalRepository(Protocol):
+    """Persistence port for **managed-project** architecture proposals.
+
+    Key: ``proposal_id``. This is project-scoped state (a design for the project
+    the assistant manages) and is deliberately separate from
+    :class:`ArchitectureVersionRepository`, which holds the assistant's own
+    baseline. Like a change request, a proposal is created once and then only
+    ever *advances* through its lifecycle, so ``delete`` exists for contract
+    consistency with the other repositories but the proposal use-cases never
+    call it - a proposal must stay auditable.
+    """
+
+    def upsert(self, proposal: ArchitectureProposal) -> None: ...
+
+    def get(self, proposal_id: str) -> Optional[ArchitectureProposal]: ...
+
+    def list(self) -> tuple[ArchitectureProposal, ...]: ...
+
+    def list_by_status(
+        self, status: ProposalStatus
+    ) -> tuple[ArchitectureProposal, ...]: ...
+
+    def list_for_project(self, project: str) -> tuple[ArchitectureProposal, ...]: ...
+
+    def delete(self, proposal_id: str) -> bool: ...
+
+
+@runtime_checkable
+class SupervisionRepository(Protocol):
+    """Persistence port for **supervision records** (key: ``supervision_id``).
+
+    One record per exact supervision identity - one row per
+    ``(project, step_no, attempt, source_report_hash, architecture_version)``.
+    The record is advisory bookkeeping, never authorization: it can describe a
+    recommended directive and the human decision about it, but it holds no Step
+    state, no attempt counter and no baseline.
+
+    The three lookups exist because the caller genuinely needs three different
+    questions answered:
+
+    * ``find_current`` - "has **this exact report** already been supervised?" (the
+      identity lookup the gate and the tick both use);
+    * ``list_for_step`` - "what is the supervision history of this attempt?"
+      (revisions of the same attempt, and the malformed first-seen search);
+    * ``list_by_status`` / ``list_unresolved`` - "what still needs work?" (the
+      restart reconciliation and the operator's board).
+    """
+
+    def upsert(self, record: SupervisionRecord) -> None: ...
+
+    def get(self, supervision_id: str) -> Optional[SupervisionRecord]: ...
+
+    def find_current(
+        self,
+        project: str,
+        step_no: int,
+        attempt: int,
+        source_report_hash: str,
+        architecture_version: str,
+    ) -> Optional[SupervisionRecord]:
+        """The record for one exact supervision identity, or ``None``."""
+        ...
+
+    def list(self) -> tuple[SupervisionRecord, ...]: ...
+
+    def list_for_step(
+        self, project: str, step_no: int, attempt: int
+    ) -> tuple[SupervisionRecord, ...]:
+        """Every supervision record of one step/attempt, oldest first."""
+        ...
+
+    def list_by_status(
+        self, status: SupervisorStatus
+    ) -> tuple[SupervisionRecord, ...]: ...
+
+    def list_unresolved(self) -> tuple[SupervisionRecord, ...]:
+        """Records a restart must reconcile, oldest first.
+
+        Exactly the statuses in :data:`SUPERVISION_RECONCILE_STATUSES`: an
+        analysis that was owed when the process died and a send intent whose
+        publication may or may not have completed.
+        """
+        ...
+
+    def delete(self, supervision_id: str) -> bool: ...
+
+
+@runtime_checkable
 class ADRRepository(Protocol):
     """Persistence port for Architecture Decision Records (key: ADR id)."""
-
     def upsert(self, adr: ADR) -> None: ...
 
     def get(self, adr_id: str) -> Optional[ADR]: ...
@@ -219,4 +315,3 @@ class AuditRepository(Protocol):
     def list_for_entity(
         self, entity_type: AuditEntityType, entity_id: str
     ) -> tuple[AuditEntry, ...]: ...
-

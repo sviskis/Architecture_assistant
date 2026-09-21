@@ -33,6 +33,8 @@ from ..ports.capabilities import WorkerRequest, WorkerResult
 __all__ = [
     "DEFAULT_EXCHANGE_DIR",
     "DEFAULT_PROTOCOL",
+    "DIRECTIVE_KIND",
+    "DIRECTIVE_VERSION",
     "ClineWorkerError",
     "TaskDispatchError",
     "ReportNotAvailableError",
@@ -47,6 +49,14 @@ DEFAULT_EXCHANGE_DIR: Path = Path("data") / "cline"
 
 #: Protocol identifier written into every dispatched task.
 DEFAULT_PROTOCOL = "architecture-assistant/v1"
+
+#: Kind marker written into a supervision directive artifact, so a human reading
+#: the exchange directory can tell a directive from a task without guessing.
+DIRECTIVE_KIND = "supervisor-directive"
+
+#: Schema version of the directive artifact itself. A later Phase may extend the
+#: artifact; the version is what lets the Cline side tell two shapes apart.
+DIRECTIVE_VERSION = "1"
 
 _TO_CLINE = "to_cline"
 _CONTEXT = "context"
@@ -169,6 +179,19 @@ class ClineWorkerAdapter:
         """Directory holding acknowledged reports."""
         return self._exchange_dir / _FROM_CLINE / _ARCHIVE
 
+    def directive_path(self, step_no: int, attempt: int) -> Path:
+        """Path of the supervision directive artifact for one dispatch.
+
+        Same deterministic identity as the task and the report
+        (``step_NNN_attempt_MMM``), same exchange channel: a directive is not a
+        second channel, it is another artifact of the one Cline talks through.
+        """
+        return (
+            self._exchange_dir
+            / _TO_CLINE
+            / f"{self._slug(step_no, attempt)}_directive.json"
+        )
+
     # -- dispatch --------------------------------------------------------
     def dispatch(self, request: WorkerRequest) -> Path:
         """Publish the context, then publish the task as the commit marker.
@@ -236,6 +259,92 @@ class ClineWorkerAdapter:
         return self._to_worker_result(data)
 
     # -- acknowledgement (explicit, caller-driven) -----------------------
+    def read_report_bytes(self, step_no: int, attempt: int) -> Optional[bytes]:
+        """The **exact** report bytes, or ``None`` while none exists.
+
+        Supervision identity is a SHA-256 over these bytes, so this method hands
+        over what the worker actually wrote: not parsed, not sanitized, not
+        re-encoded. The atomic-write protocol above means a partially written
+        file can never appear as a report - an in-flight write lives in a
+        ``.tmp`` sibling and is only renamed into place when it is complete - so
+        there is nothing to filter out here beyond "the file does not exist yet".
+        """
+        path = self.report_path(step_no, attempt)
+        if not path.is_file():
+            return None
+        try:
+            return path.read_bytes()
+        except OSError as error:
+            raise ReportParseError(
+                f"cannot read {path.name}: {error}"
+            ) from error
+
+    def publish_directive(
+        self, directive: Mapping[str, Any], *, step_no: int, attempt: int
+    ) -> Path:
+        """Publish one directive artifact to the Cline channel.
+
+        Written atomically, exactly like a task, so a worker can never read half
+        a directive. Publication is deliberately **at-least-once**: republishing
+        the identical directive is safe because the artifact is deterministic and
+        the name is derived from ``(step_no, attempt)`` only - which is also why
+        the caller re-checks whose directive it is holding before treating a
+        publication as its own.
+
+        A directive without ``supervision_id`` and ``source_report_hash`` is
+        refused: an artifact that cannot be identified must never reach the
+        worker, because nothing afterwards could tell which report it answers.
+        """
+        payload = dict(directive)
+        for required in ("supervision_id", "source_report_hash"):
+            value = payload.get(required)
+            if not isinstance(value, str) or not value.strip():
+                raise TaskDispatchError(
+                    f"a directive artifact requires a non-empty {required!r}; "
+                    f"got {value!r}"
+                )
+        path = self.directive_path(step_no, attempt)
+        try:
+            _atomic_write_text(path, _dump_json(payload))
+        except Exception as error:  # noqa: BLE001 - re-raised as adapter error
+            raise TaskDispatchError(
+                f"failed to write directive {path.name}: {error}"
+            ) from error
+        return path
+
+    def read_directive(
+        self, step_no: int, attempt: int
+    ) -> Optional[Mapping[str, Any]]:
+        """Read back the published directive artifact, or ``None``.
+
+        Strictly read-only. The caller uses it to reconcile a durable send
+        intent, so a partially written file must never be mistaken for a
+        published one: an unparsable artifact raises instead of returning an
+        empty mapping, and the caller treats "present but unreadable" as *not*
+        its own directive rather than as success.
+        """
+        path = self.directive_path(step_no, attempt)
+        if not path.is_file():
+            return None
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as error:
+            raise ReportParseError(
+                f"cannot read {path.name}: {error}"
+            ) from error
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as error:
+            raise ReportParseError(
+                f"{path.name} is not valid JSON: {error}"
+            ) from error
+        if not isinstance(data, dict):
+            raise ReportParseError(
+                f"{path.name} must contain a JSON object; "
+                f"got {type(data).__name__}"
+            )
+        return data
+
     def acknowledge_report(self, step_no: int, attempt: int) -> Path:
         """Move an already-read report into the archive and return its new path.
 
@@ -387,4 +496,3 @@ def _require_string_list(value: Any, field: str, path: Path) -> None:
         raise ReportParseError(
             f"{path.name} field {field!r} must be a list of strings; got {value!r}"
         )
-

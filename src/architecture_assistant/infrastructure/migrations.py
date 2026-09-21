@@ -29,6 +29,8 @@ __all__ = [
     "AUDIT_TABLE_NAME",
     "CHANGE_REQUEST_TABLE_NAME",
     "COST_TABLE_NAME",
+    "PROPOSAL_TABLE_NAME",
+    "SUPERVISION_TABLE_NAME",
 ]
 
 
@@ -194,11 +196,23 @@ CHANGE_REQUEST_TABLE_NAME = "architecture_change_requests"
 #: Table created by migration v4 (idempotent cost accounting telemetry).
 COST_TABLE_NAME = "cost_records"
 
+#: Table created by migration v5 (managed-project architecture proposals).
+PROPOSAL_TABLE_NAME = "architecture_proposals"
+
+#: Table created by migration v6 (advisory supervision records).
+SUPERVISION_TABLE_NAME = "supervision_records"
+
 #: All source-of-truth tables created by the migrations (excluding the
 #: ``schema_migrations`` bookkeeping table).
 TABLE_NAMES: tuple[str, ...] = (
     _V1_TABLE_NAMES
-    + (AUDIT_TABLE_NAME, CHANGE_REQUEST_TABLE_NAME, COST_TABLE_NAME)
+    + (
+        AUDIT_TABLE_NAME,
+        CHANGE_REQUEST_TABLE_NAME,
+        COST_TABLE_NAME,
+        PROPOSAL_TABLE_NAME,
+        SUPERVISION_TABLE_NAME,
+    )
 )
 
 
@@ -330,6 +344,138 @@ def _migration_004_down(conn: sqlite3.Connection) -> None:
     conn.execute(f"DROP TABLE IF EXISTS {COST_TABLE_NAME}")
 
 
+#: Managed-project architecture proposals are **project-scoped** state: a
+#: design for the project the assistant manages, never the assistant's own
+#: baseline (which lives in ``architecture_versions`` and is declared in code).
+#: The table carries no foreign key for the same reason the schema rule already
+#: states - no speculative relations between aggregates - and because a proposal
+#: may legitimately be recorded before any step exists.
+#:
+#: The two indexes are the query patterns the proposal board actually uses:
+#: "the proposals of this project, newest first" and "the proposals in this
+#: status" (the panel needs the open drafts).
+_MIGRATION_005_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE architecture_proposals (
+        proposal_id TEXT PRIMARY KEY,
+        project TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        requirement TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        source_review_id TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        modules TEXT NOT NULL DEFAULT '[]',
+        data_flows TEXT NOT NULL DEFAULT '[]',
+        external_dependencies TEXT NOT NULL DEFAULT '[]',
+        architecture_rules TEXT NOT NULL DEFAULT '[]',
+        proposed_rules TEXT NOT NULL DEFAULT '[]',
+        risks TEXT NOT NULL DEFAULT '[]',
+        adr_candidates TEXT NOT NULL DEFAULT '[]',
+        implementation_phases TEXT NOT NULL DEFAULT '[]',
+        unresolved_questions TEXT NOT NULL DEFAULT '[]',
+        rationale TEXT NOT NULL DEFAULT '',
+        review_digest TEXT NOT NULL DEFAULT '{}',
+        architecture_version TEXT,
+        revision_no INTEGER NOT NULL DEFAULT 1,
+        revision_of TEXT,
+        status TEXT NOT NULL,
+        decided_by TEXT NOT NULL DEFAULT '',
+        decided_at TEXT,
+        decision_reason TEXT NOT NULL DEFAULT '',
+        revision_feedback TEXT NOT NULL DEFAULT '',
+        superseded_by TEXT
+    )
+    """,
+    """
+    CREATE INDEX idx_architecture_proposals_status
+        ON architecture_proposals (status, created_at, proposal_id)
+    """,
+    """
+    CREATE INDEX idx_architecture_proposals_project
+        ON architecture_proposals (project, created_at, proposal_id)
+    """,
+)
+
+
+def _migration_005_architecture_proposals(
+    conn: sqlite3.Connection,
+) -> None:
+    """Create the managed-project architecture proposal table."""
+    for statement in _MIGRATION_005_STATEMENTS:
+        conn.execute(statement)
+
+
+def _migration_005_down(conn: sqlite3.Connection) -> None:
+    """Drop the managed-project architecture proposal table."""
+    conn.execute("DROP INDEX IF EXISTS idx_architecture_proposals_status")
+    conn.execute("DROP INDEX IF EXISTS idx_architecture_proposals_project")
+    conn.execute(f"DROP TABLE IF EXISTS {PROPOSAL_TABLE_NAME}")
+
+
+#: Supervision records (Step 28 Phase 1) are **advisory bookkeeping**: one row per
+#: exact supervision identity, i.e. per
+#: ``(project, step_no, attempt, source_report_hash, architecture_version)``. The
+#: table is deliberately independent of ``steps``: it is not workflow state, it
+#: carries no attempt counter and no FSM position, and a record may legitimately
+#: exist for a report whose step a human later abandons.
+#:
+#: The two indexes are the query patterns the supervision code actually uses:
+#: "the exact record for this report identity" (the gate and the tick) and "the
+#: records that still need reconciliation" (the startup pass).
+_MIGRATION_006_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE supervision_records (
+        supervision_id TEXT PRIMARY KEY,
+        project TEXT NOT NULL,
+        step_no INTEGER NOT NULL,
+        attempt INTEGER NOT NULL,
+        source_report_hash TEXT NOT NULL,
+        architecture_version TEXT NOT NULL,
+        status TEXT NOT NULL,
+        action TEXT,
+        reason TEXT NOT NULL DEFAULT '',
+        risk TEXT,
+        instruction_for_cline TEXT NOT NULL DEFAULT '',
+        requires_human INTEGER NOT NULL DEFAULT 0,
+        provider TEXT NOT NULL DEFAULT '',
+        cost_available INTEGER NOT NULL DEFAULT 0,
+        evidence TEXT NOT NULL DEFAULT '[]',
+        first_seen_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        decided_by TEXT NOT NULL DEFAULT '',
+        decided_at TEXT,
+        decision_reason TEXT NOT NULL DEFAULT '',
+        sent_at TEXT,
+        escalated_at TEXT
+    )
+    """,
+    """
+    CREATE UNIQUE INDEX idx_supervision_identity
+        ON supervision_records (
+            project, step_no, attempt, source_report_hash, architecture_version
+        )
+    """,
+    """
+    CREATE INDEX idx_supervision_status
+        ON supervision_records (status, created_at, supervision_id)
+    """,
+)
+
+
+def _migration_006_supervision_records(conn: sqlite3.Connection) -> None:
+    """Create the supervision record table."""
+    for statement in _MIGRATION_006_STATEMENTS:
+        conn.execute(statement)
+
+
+def _migration_006_down(conn: sqlite3.Connection) -> None:
+    """Drop the supervision record table."""
+    conn.execute("DROP INDEX IF EXISTS idx_supervision_status")
+    conn.execute("DROP INDEX IF EXISTS idx_supervision_identity")
+    conn.execute(f"DROP TABLE IF EXISTS {SUPERVISION_TABLE_NAME}")
+
+
 #: Ordered migration list. Versions must be unique and strictly increasing.
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(
@@ -356,5 +502,16 @@ MIGRATIONS: tuple[Migration, ...] = (
         up=_migration_004_cost_records,
         down=_migration_004_down,
     ),
+    Migration(
+        version=5,
+        name="architecture_proposals",
+        up=_migration_005_architecture_proposals,
+        down=_migration_005_down,
+    ),
+    Migration(
+        version=6,
+        name="supervision_records",
+        up=_migration_006_supervision_records,
+        down=_migration_006_down,
+    ),
 )
-

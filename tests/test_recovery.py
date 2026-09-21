@@ -743,9 +743,15 @@ class TestSourceTreeUntouched:
 
         assert modules
         assert all(name.startswith(ROOT_PACKAGE) for name in modules)
-        # Step 21 left 54 production modules. Step 23 adds exactly two - the
-        # shared dispatch seam and the approval gate - and nothing else.
-        assert len(modules) == 56
+        # Step 21 left 54 production modules. Step 23 added exactly two - the
+        # shared dispatch seam and the approval gate - Step 25 the plan loader,
+        # Step 26 the advisory architecture review, Step 27 the log-event
+        # contract and the managed-project proposal pair, and Step 28 the
+        # advisory supervision quartet (the deterministic send policy, the
+        # supervision use-case with its fail-closed gate, the headless
+        # tick-driven runtime and the offline scripted supervisor). Nothing else
+        # has entered the scanned tree.
+        assert len(modules) == 65
 
     def test_the_crash_driver_is_not_an_architecture_module(self) -> None:
         assert CHILD.parent.name == "tests"

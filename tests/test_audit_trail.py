@@ -100,8 +100,11 @@ class TestAuditEntry:
         assert AuditEntry.from_dict(entry.to_dict()) == entry
 
     def test_entity_types_are_adr_risk_step_and_acr(self) -> None:
-        """``STEP`` was added with the Step 9 orchestrator, ``ACR`` with Step 11
-        and ``PROJECT`` with the Step 20 human-override use-case.
+        """``STEP`` was added with the Step 9 orchestrator, ``ACR`` with Step 11,
+        ``PROJECT`` with the Step 20 human-override use-case, ``PLAN`` with the
+        Step 25 plan loader, ``PROPOSAL`` with the Step 27 managed-project
+        architecture proposal and ``SUPERVISION`` with the Step 28 advisory
+        supervision use-case (durable supervision decisions only).
         """
         assert {member.value for member in AuditEntityType} == {
             "ADR",
@@ -109,6 +112,9 @@ class TestAuditEntry:
             "STEP",
             "ACR",
             "PROJECT",
+            "PLAN",
+            "PROPOSAL",
+            "SUPERVISION",
         }
 
     def test_actions_are_canonical(self) -> None:
@@ -116,7 +122,8 @@ class TestAuditEntry:
 
         No step-level verb was added with Step 20: a step transition stays
         ``UPDATE`` (the Step entity's one transition action) and the human
-        provenance is carried by ``detail``.
+        provenance is carried by ``detail``. ``IMPORT`` is the Step 25 plan
+        verb and belongs to the ``PLAN`` entity alone.
         """
         assert {member.value for member in AuditAction} == {
             "CREATE",
@@ -132,6 +139,7 @@ class TestAuditEntry:
             "PAUSE",
             "RESUME",
             "SET_MODE",
+            "IMPORT",
         }
 
 
@@ -210,4 +218,3 @@ class TestTransactionBoundary:
             "second",
             "third",
         ]
-

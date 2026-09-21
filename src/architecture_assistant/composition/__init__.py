@@ -29,13 +29,23 @@ from .evolution import (
 )
 from .root import (
     DEFAULT_REPORT_DIR,
+    DEFAULT_REVIEW_QUESTION,
     DEFAULT_SOURCE_ROOT,
+    EVENT_LEVEL_ERROR,
+    EVENT_LEVEL_INFO,
+    EVENT_LEVEL_WARN,
+    EVENT_LEVELS,
+    LOG_COMPONENTS,
     Composition,
     CompositionConfig,
     baseline_v1,
     baseline_v1_1,
+    build_event,
     canonical_baseline,
+    component_for,
     compose,
+    exception_reason,
+    sanitize_text,
 )
 from .realization import (
     VALIDATOR_SOURCE,
@@ -58,6 +68,17 @@ __all__ = [
     "canonical_baseline",
     "DEFAULT_SOURCE_ROOT",
     "DEFAULT_REPORT_DIR",
+    "DEFAULT_REVIEW_QUESTION",
+    # the log-event contract (Step 27)
+    "EVENT_LEVELS",
+    "EVENT_LEVEL_INFO",
+    "EVENT_LEVEL_WARN",
+    "EVENT_LEVEL_ERROR",
+    "LOG_COMPONENTS",
+    "build_event",
+    "component_for",
+    "exception_reason",
+    "sanitize_text",
     "ArchitectureRealizationAdapter",
     "VALIDATOR_SOURCE",
     # declared architecture changes (Step 11)

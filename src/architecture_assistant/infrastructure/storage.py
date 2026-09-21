@@ -13,6 +13,7 @@ from contextlib import AbstractContextManager
 from ..ports.repositories import (
     ADRRepository,
     ArchitectureChangeRequestRepository,
+    ArchitectureProposalRepository,
     ArchitectureVersionRepository,
     AuditRepository,
     DecisionRepository,
@@ -20,11 +21,13 @@ from ..ports.repositories import (
     ProjectRepository,
     RiskRepository,
     StepRepository,
+    SupervisionRepository,
     TaskRepository,
 )
 from .repositories import (
     SqliteADRRepository,
     SqliteArchitectureChangeRequestRepository,
+    SqliteArchitectureProposalRepository,
     SqliteArchitectureVersionRepository,
     SqliteAuditRepository,
     SqliteDecisionRepository,
@@ -32,6 +35,7 @@ from .repositories import (
     SqliteProjectRepository,
     SqliteRiskRepository,
     SqliteStepRepository,
+    SqliteSupervisionRepository,
     SqliteTaskRepository,
 )
 from .sqlite import SqliteTransactionPort
@@ -57,6 +61,8 @@ class SqliteStorage:
         self._change_requests = SqliteArchitectureChangeRequestRepository(
             connection
         )
+        self._proposals = SqliteArchitectureProposalRepository(connection)
+        self._supervisions = SqliteSupervisionRepository(connection)
         self._adrs = SqliteADRRepository(connection)
         self._risks = SqliteRiskRepository(connection)
         self._findings = SqliteFindingRepository(connection)
@@ -95,6 +101,14 @@ class SqliteStorage:
     @property
     def change_requests(self) -> ArchitectureChangeRequestRepository:
         return self._change_requests
+
+    @property
+    def proposals(self) -> ArchitectureProposalRepository:
+        return self._proposals
+
+    @property
+    def supervisions(self) -> SupervisionRepository:
+        return self._supervisions
 
     @property
     def adrs(self) -> ADRRepository:

@@ -45,10 +45,10 @@ Six layers exist; imports are enforced by deterministic architecture rules.
 | Layer | Package | Responsibility |
 | --- | --- | --- |
 | `domain` | `src/architecture_assistant/domain` | Dependency-free state: enums, frozen dataclasses, the transition tables, audit model |
-| `ports` | `src/architecture_assistant/ports` | Protocols for storage, repositories, transactions, capabilities (worker, cost, realization, reporting, judge) |
+| `ports` | `src/architecture_assistant/ports` | Protocols for storage, repositories, transactions, capabilities (worker, cost, realization, reporting, judge, supervisor) |
 | `architecture` | `src/architecture_assistant/architecture` | Source scanner, deterministic rules and validator for the declared baseline |
-| `application` | `src/architecture_assistant/application` | Use cases: orchestrator, scheduler, loop policy, context builder, realization control, bootstrap, versioning, evolution, evidence merger, decision engine, judge use case, reporting projection, monitor, human override, approval gate |
-| `infrastructure` | `src/architecture_assistant/infrastructure` | SQLite storage, repositories, migrations, Cline file channel, provider adapters, cost plugin, Excel and Markdown renderers |
+| `application` | `src/architecture_assistant/application` | Use cases: orchestrator, scheduler, loop policy, context builder, realization control, bootstrap, versioning, evolution, evidence merger, decision engine, judge use case, reporting projection, monitor, human override, approval gate, plan loader, architecture review, synthesis, proposal approval, advisory supervision (send policy, gate, tick-driven runtime) |
+| `infrastructure` | `src/architecture_assistant/infrastructure` | SQLite storage, repositories, migrations, Cline file channel, provider adapters, cost plugin, Excel and Markdown renderers, the offline scripted supervisor |
 | `composition` | `src/architecture_assistant/composition` | The single wiring point: opens the database, reconciles the baseline and declared changes, builds the object graph |
 
 Architecture baseline **v1.1** declares three deterministic rules that every
@@ -86,6 +86,71 @@ covered by tests.
 - **Judge adapter** - a separate capability consulted only for an explicit,
   otherwise unresolvable evidence conflict; its decision never replaces the
   deterministic one.
+- **Architecture review** - one explicit, advisory consultation: the three
+  existing advisors answer the operator's own question, the evidence merger and
+  the decision engine explain the result, and the judge is consulted only for a
+  structurally valid conflict. It is read-only: no workflow state, no gate
+  verdict and no database row changes hands.
+- **Architecture proposal (managed project)** - one explicit flow from one
+  advisory review to one durable, human-approved design *for the project the
+  assistant manages*: an `ArchitectureProposal` aggregate with its own lifecycle
+  (`DRAFT -> APPROVED` / `REJECTED` / `REVISION_REQUESTED`, and `SUPERSEDED`
+  when a later revision replaces it), its own `architecture_proposals` table and
+  its own revision lineage (`revision_no` / `revision_of`). Synthesis is
+  provider-neutral and **deterministic by default** (no provider, no key, no
+  cost) and fails closed on malformed content; every generation and every human
+  decision writes exactly one audit entry (`PROPOSAL`/`CREATE`, `UPDATE`,
+  `REJECT`). An approved proposal records *the managed project's* architecture
+  and **never** mutates the assistant's own baseline: no
+  `ArchitectureVersion`, no ACR, no assistant ADR or risk, no rule change and no
+  realization verdict.
+- **Operator log** - one ephemeral, read-only event log per session: timestamp,
+  level (`INFO`/`WARN`/`ERROR`), component, action, message and optional step /
+  review id. A review logs every stage it reaches *and* the ones it does not
+  (a gate that cannot be read, a judge that was not consulted). Messages are
+  sanitized by contract, so no credential, authorization header or provider body
+  can reach the panel, and clearing the view deletes nothing.
+- **Side-by-side advisor comparison** - the review tab shows the three advisors in
+  one window as three read-only panes (status, full finding text, structure,
+  evidence references, reason, tokens, cost) with the shared results - merged
+  evidence, conflicts, judge, advisory decision, total cost - directly below them.
+- **Advisory supervision (Step 28)** - an *optional*, fail-closed analysis of one
+  worker report before the authoritative review. It is **off by default**; with
+  it off the loop is exactly the pre-supervision loop, and the refusal is
+  **enforced in the application, not in the panel**: with
+  `supervision=False` no report is read or analysed, no supervisor is called, no
+  supervision row is written, no directive is created and no audit entry is
+  appended - a direct use-case or core-worker call gets the same deterministic
+  disabled answer (`outcome: disabled`, `status: DISABLED`, `waiting_for: none`)
+  as the panel's disabled tab, and every human supervision action fails closed
+  with `SupervisionDisabledError`. When it is on:
+  - the report is supervised under an **identity** that is a hash of the exact
+    bytes plus `(project, step_no, attempt, baseline)`, so a rewritten report is a
+    new record and an old decision can never authorize it;
+  - a **fail-closed gate** lets the review start only for an explicitly allowing
+    status of the *current* report: a missing row blocks, `SENT` blocks (a
+    delivered directive waits for **new** evidence), and only `NO_ACTION`,
+    `WAIVED` and `REJECTED` allow;
+  - the send policy is **re-derived by the assistant** and never trusted from the
+    supervisor's labels: only `CLARIFY`/`RETRY`, only `LOW` risk, never in
+    `MANUAL`, never with `requires_human`, and a deterministic denylist refuses
+    any instruction naming architecture, dependencies, schema, deletion,
+    security, credentials or attempt/verification changes;
+  - malformed report bytes never reach a supervisor: they are recorded
+    `MALFORMED` and escalate on two **persisted** deadlines (per hash and
+    absolute), so nothing loops forever;
+  - a directive is delivered as a durable intent (`SEND_PENDING`), an
+    at-least-once publication into the worker channel and a durable completion
+    (`SENT`); a restart reconciles whichever half finished;
+  - four human write paths - **Approve & Send**, **Reject Directive**, **Waive**
+    and **Escalate** - each require an exact supervision id plus an actor and a
+    reason, each revalidate the identity first, each write exactly one status
+    change and exactly one audit entry in one transaction, and none of them can
+    un-send a delivered directive.
+  The supervisor is advisory in the strongest sense: it cannot set `VERIFIED`,
+  move a step, increment an attempt, bypass `max_attempts`, acknowledge a report,
+  touch a baseline, an ACR, an ADR or a risk, or reach the realization gate. The
+  only table it writes is `supervision_records`.
 - **Cost tracking** - an idempotent accounting store keyed by the stable
   identity of a billable provider event; a conflicting replay fails closed.
 - **Excel reporting** - a workbook rendered from the reporting projection.
@@ -123,15 +188,23 @@ before an earlier one is verified.
 4. **Report collection** - the loop checks for the worker report on every tick,
    before the deadline check, so a report that arrived in time is never
    discarded by a timeout.
-5. **Review** - the received report is mapped deterministically onto a review
+5. **Supervision (optional)** - when supervision is enabled, the report must
+   first be analysed and reach an *allowing* status of the current report's
+   supervision record before the review may start (Gate A at
+   `REPORT_RECEIVED -> START_REVIEW`, Gate B again inside the review). A blocked
+   report reaches neither the realization gate nor the acknowledgement, and the
+   supervision record is written *before* the supervisor is asked, so a crash can
+   never lose the fact that an analysis was owed. With supervision disabled the
+   loop skips both checks entirely.
+6. **Review** - the received report is mapped deterministically onto a review
    event. Architecture questions and unresolved issues are always a human
    decision; otherwise the report status decides.
-6. **Realization gate** - before anything may reach `VERIFIED`, the source tree
+7. **Realization gate** - before anything may reach `VERIFIED`, the source tree
    is scanned and validated against the authoritative baseline; a violation
    downgrades the outcome to `BLOCKED`.
-7. **Outcomes** - verification on success, a bounded retry loop for revision and
+8. **Outcomes** - verification on success, a bounded retry loop for revision and
    worker failure, blocking for human decisions, conflict resolution, or abort.
-8. **Report consumption** - the outcome is persisted first; only then is the
+9. **Report consumption** - the outcome is persisted first; only then is the
    report acknowledged (archived). A crash before that point keeps the report on
    disk and the persisted state authoritative.
 
@@ -174,6 +247,28 @@ one.
 - **Replay and idempotence.** Task rows are unique by `(step_no, attempt)`,
   cost records are unique by `event_id`, and replaying the same report after a
   restart adds no duplicate task, cost, audit or architecture side effect.
+- **Supervision restarts are honest.** A supervision identity is unique per
+  `(project, step_no, attempt, report hash, baseline)` and the record is written
+  **before** the supervisor is asked. A restart therefore finds either a decided
+  record (nothing to do) or `ANALYSIS_PENDING` (the analysis was owed, so it is
+  re-run - on the same row) or `SEND_PENDING` (the publication may or may not
+  have happened, so reconciliation resolves it from persisted state **plus the
+  artifact itself**). Neither SQLite nor the filesystem can be joined into one
+  atomic step, so the design claims **at-least-once** delivery and a resolved
+  record, never exactly-once magic.
+- **A polling tick is nearly free.** The tick reconciles, looks at the current
+  report and stops: an unchanged report is never analysed twice, no provider is
+  called for it, no context is rebuilt and **no audit entry is written**. Only a
+  durable decision (analysis, send, human action) writes one.
+- **A disabled session cannot be half-on.** `supervision=False` is enforced at the
+  application boundary, so no code path - a panel button, a core-worker call, a
+  script - can analyse a report, call a supervisor, write a row, publish a
+  directive or append a supervision audit entry while supervision is off. The
+  disabled answer is deterministic (`outcome: disabled`, `status: DISABLED`) and
+  the runtime tick is inert: no counter, no timestamp, no event, no
+  reconciliation. A `SEND_PENDING` or `ANALYSIS_PENDING` record left by an earlier
+  *enabled* session is deliberately not touched while supervision is off - it is
+  resolved the moment supervision is enabled again, on the first tick.
 
 ---
 
@@ -281,11 +376,224 @@ finally:
     composition.close()
 ```
 
-The plan itself is seeded through the storage port
-(`composition.storage.steps.upsert(...)`); there is no plan-ingestion UI in v1.
-Human commands are issued through `composition.human_override` (state control)
-and `composition.approval` (approve / reject), and `composition.monitor` reads
-state without changing it.
+The plan itself is imported through the controlled plan loader - the only write
+path a plan has:
+
+```python
+plan_text = Path("examples/plan_youtube_to_mp3.json").read_text(encoding="utf-8")
+
+preview = composition.plan_loader.preview(plan_text)      # reads only, writes nothing
+print(preview.importable, preview.step_count, preview.blocked_reason)
+
+if preview.importable:
+    result = composition.plan_loader.import_plan(
+        plan_text, actor="operator", reason="the approved pilot plan",
+        source_file="examples/plan_youtube_to_mp3.json",
+    )
+    print(result.step_count, composition.health().current_step_no)
+```
+
+An import validates the whole file first and writes **nothing** if anything is
+wrong; it refuses a database that already holds steps, a plan that names another
+project or plan version, and any unknown field (including a workflow state). All
+steps plus exactly one `PLAN`/`IMPORT` audit entry are written in one
+transaction, and the project row itself is never touched. Human commands are
+issued through `composition.human_override` (state control) and
+`composition.approval` (approve / reject), and `composition.monitor` reads state
+without changing it.
+
+**Operator panel (v1.1).** `python -m architecture_assistant_gui` opens the
+presentation-only operator panel: it shows the monitor projection, the audit
+trail, the open risks and the worker channel, and every button calls one of the
+use-cases above through a single dedicated core thread. The panel never writes
+the database; **Load Plan** performs the preview-and-confirm import shown above:
+
+```console
+python -m architecture_assistant_gui --database data/youtube_to_mp3.db \
+    --project-name youtube_to_mp3 --plan-version 1.0 --mode MANUAL --actor gints
+```
+
+Supervision is the panel's one **opt-in** switch; without it the panel behaves
+exactly as it did before supervision existed:
+
+```console
+python -m architecture_assistant_gui --database data/youtube_to_mp3.db \
+    --supervision --actor gints
+```
+
+**Run Architecture Review (v1.1).** The same panel carries one explicit,
+advisory consultation of the three existing advisors. The operator writes the
+**review question** himself (it is prefilled with a default and sent verbatim to
+every advisor - one question, one run, no conversation).
+
+The tab is laid out for comparison, in one window (never extra OS windows):
+
+* the **three advisors side by side**, one read-only pane each, titled with the
+  provider name and carrying that provider's execution status (coloured
+  `INFO`/`WARN`/`ERROR`), the **full finding text**, its structured facts
+  (severity, confidence, relation, anchor, step, finding id, evidence refs),
+  its **evidence references**, the sanitized **ABSTAIN/ERROR reason** and its
+  **tokens and cost** - so all three answers can be read against each other;
+* **below them the shared results**: merged evidence, the validated conflicts,
+  the judge result, the advisory decision (marked *explains, never overrides*)
+  and the cost of the review, with the total in one bold line and one row per
+  advisor plus the judge.
+
+Above the panes sit the review header (project, **configured `source_root`**,
+current step, architecture version, fresh deterministic gate status) and the
+question field. Before the first review the panes are already labelled from the
+configured advisors and say *not run yet*; a configured advisor is never hidden,
+and a missing one is padded with an explicit idle pane rather than an invented
+result. The review writes **nothing** - no workflow state, no finding, no
+decision, no ADR/ACR, no baseline - and the deterministic gate stays the only
+verdict. The only database side effect is the cost telemetry each adapter records
+for itself.
+
+**Generate Architecture Proposal (v1.1).** After a review, the **Architecture
+Proposal** tab offers four buttons - **Generate Architecture Proposal**,
+**Approve**, **Request Revision** and **Reject** - plus two inputs: an optional
+**requirement addendum** (when empty, the review question is used verbatim) and
+the **revision feedback**. A typical run is: review, Generate, read the proposal,
+Approve; or Generate, and if the design is not right, write the feedback and
+Request Revision, fix the requirement addendum, and Generate again - which
+creates the next revision and marks the previous one `SUPERSEDED`. Both revisions
+stay in the stored-proposals table, so the history of the design is visible and
+never rewritten.
+
+The proposal is durable and project-scoped; the *review* it was built from is not
+(a review is ephemeral and writes nothing). That is why the tab shows the
+**bounded evidence digest** next to the proposal: the review id, the advisor
+counts and finding sources, the conflicts, the judge status, the advisory
+decision and - clearly labelled as the *assistant's* verdict, not the managed
+project's - the deterministic gate that was current at review time. An approved
+proposal therefore stays explicable after a restart even though the review that
+produced it is gone.
+
+**Supervisor (v1.1).** When the panel is started with `--supervision`, a
+**Supervisor** tab shows the advisory supervision of the *current* report. It is
+the same idea as the review tab: the operator sees three read-only panes in one
+window, and the panel decides nothing.
+
+- **LEFT - Architecture Assistant** (what the assistant owns): the task goal and
+  description, the step state with `attempt of max_attempts`, attempts remaining,
+  mode, whether the project is paused, the baseline, and the bounded facts a
+  supervisor would be handed - the operator's own constraints, accepted ADRs,
+  open risks, deterministic findings and open change requests.
+- **CENTER - Cline** (what the worker submitted): report status and summary, the
+  files created/changed/deleted, the test block, the issues and architecture
+  questions the worker raised, the dependencies it added, when the report was
+  first seen and its exact hash.
+- **RIGHT - Supervisor** (the advisory analysis): the provider, the analysis
+  status, the proposed action and risk, the reason, the evidence, the proposed
+  instruction, whether a human is required, who decided and why, **the gate
+  verdict** (`ALLOW`/`BLOCK` plus its reason) and the two persisted malformed
+  deadlines.
+
+Above the panes the header carries the identity and the polling state: project,
+step, attempt, worker state, supervisor state, the current report hash, the
+supervision id, whether the runtime is polling, and the deterministic
+`waiting_for` value. Below them one history table lists every supervision
+identity of that attempt, newest first, with its status, action, risk, report
+hash and last update.
+
+The controls are four human write paths plus one explicit read: **Analyze
+Report** (idempotent by identity - a decided report is never analysed twice),
+**Approve & Send**, **Reject Directive**, **Waive** and **Escalate**. Each is
+enabled only while the *core* would accept it, each collects the actor and a
+reason, and each shows the core's own refusal text when it would not. The panel
+never sends a supervision id: the core resolves the current report identity
+itself, so a stale panel cannot decide anything about a report the workflow has
+moved past. The directive instruction is collected verbatim and captured on the
+UI thread before the call is handed to the core. With supervision disabled the
+tab is inert and says so, and the application submits no polling tick at all -
+and the core refuses those same actions anyway, because disabled supervision is
+enforced by the application: the button state is a convenience for the operator,
+never the guard.
+
+The runtime itself is **tick-driven, not a daemon**: the assistant owns exactly
+one thread allowed to touch the source of truth, so the panel asks the core for
+one tick (`--supervision` schedules that every two seconds) and a tick that
+arrives while another action runs is dropped instead of queued. Nothing is
+logged by a tick that changed nothing.
+
+**Logs (v1.1).** A **Logs** tab shows the same activity as a newest-first,
+read-only table: sequence, time, level, component, action, message, step and
+review id, with `WARN` and `ERROR` entries coloured. An architecture review logs
+its context build, the gate check, each advisor's start and outcome, the evidence
+merge, the decision engine, the judge (`start`/`result`, or an explicit
+`not-consulted`), the cost collection and its own completion - in the order it
+happened. The button **Clear View** empties the panel's view and nothing else:
+the persistent record of what happened is the append-only audit trail on the
+Audit tab.
+
+The two tabs divide the work deliberately: the **Architecture Review** tab is for
+architecture *content* (what the advisors said, what was merged, what the gate
+and the judge concluded), while **Logs** is for operational and debug *events*
+(who started, what failed, how long and how much it cost). Neither replaces the
+other, and neither writes anywhere.
+
+**Architecture Proposal (v1.1).** A third tab turns one advisory review into a
+durable, human-approved design for **the managed project**, and its first job is
+to keep two architectures apart.
+
+1. **The Architecture Assistant's own architecture** - its layers, its rules, its
+   `ArchitectureVersion` baseline, its ACRs, its ADRs and risks, and the
+   deterministic validator that enforces all of it. This is what the assistant is
+   *made of*, it is declared in code, and nothing in this tab can touch it.
+2. **The managed project's architecture** - the design for the project this
+   database manages (`youtube_to_mp3` in the pilot). This is what the
+   `ArchitectureProposal` aggregate describes, and it is the only thing this tab
+   changes.
+
+The tab is therefore honest about what an approval means: an `APPROVED`
+proposal says *"this is the human-approved architecture for the managed
+project"*. It is **not** an assistant release, it does **not** create a change
+request, and it does **not** bump the assistant's baseline - a managed project
+changing its mind is not a reason for Architecture Assistant v1.2.
+
+The flow is deliberately narrow. **Generate Architecture Proposal** consumes
+exactly one review (the review is the evidence, and the last one run in this
+session is used; without a review the button is disabled rather than guessed),
+echoes the operator's requirement verbatim, keeps every advisor finding, status,
+conflict and unresolved question without ever voting on them, and writes one
+`DRAFT` proposal plus one audit entry. With no synthesizer configured the
+deterministic organizer runs: it fills only what it can *derive* from the review
+and names everything else as an unresolved question, because inventing a managed
+project's modules is not the assistant's call. A synthesizer that answers outside
+the closed content contract is refused and **nothing is stored**.
+
+Then a human decides: **Approve**, **Reject** or **Request Revision** (which
+requires feedback). Each needs an explicit actor and a reason, each writes
+exactly one status change and exactly one audit entry in one transaction, and
+each is refused - before the transaction, so nothing is written - when the
+proposal has already been decided, when a newer revision replaced it, when it
+belongs to another project, or when its stored inputs no longer match its own
+fingerprint. Repeating the identical decision is a no-op; repeating it with a
+different reason fails closed rather than rewriting history. **Request Revision
+never re-synthesizes on its own**: it records the feedback, and the new revision
+exists only when the operator explicitly generates one, at which point the
+predecessor is marked `SUPERSEDED` and both rows remain.
+
+The tab shows the proposal's header (id, managed project, status, revision and
+its predecessor, source review id, the baseline that was current at review time
+as *traceability only*, created/decided timestamps, the deciding actor, the
+reason, the feedback and the fingerprint), the proposed architecture as read-only
+tables (summary and rationale, modules and boundaries, data flow, external
+dependencies, rules, risks, ADR candidates, implementation phases, unresolved
+questions) and the bounded evidence digest the proposal was built from. Nothing
+in the tab is a rule the assistant enforces: the proposal's `proposed_rules` are
+the managed project's rules, and no project-rule enforcement exists in v1.1.
+
+The log is deliberately **not** a logging framework: the project issues no
+`logging` call anywhere, and a process-wide logger would be shared state - two
+assistant instances in one process would share it, which would make the per-run
+order the panel promises non-deterministic. Instead the core emits a validated
+event (`build_event`) through an injected hook, one thread-safe queue owned by the
+GUI's core worker stamps the sequence number, and the Tk thread only drains plain
+dictionaries and renders them. The contract itself lives in
+`application/eventlog.py`: it fixes the shape and vocabulary, redacts credentials
+and headers, collapses and bounds messages, and allows only an exception **type
+name** - never its message - to be logged for a failure.
 
 ---
 
@@ -302,6 +610,51 @@ a snapshot of that validation run, not a live guarantee: any later change to the
 source, tests, dependencies or environment can change them, and the architecture
 self-check has to be re-run to confirm compliance on the current tree.
 
+Current tree, after the operator panel (v1.1), the plan loader, the advisory
+architecture review, the operator log, the side-by-side advisor layout, the
+managed-project architecture proposal and the advisory supervision of a worker
+report:
+
+- **3026 passed / 0 failed** (`python -m pytest -q`)
+- architecture self-check: baseline **1.1**, compliant **True**, **0**
+  violations, **65** modules, **3** architecture rules
+
+The plan loader, the architecture review, the log-event contract, the
+managed-project proposal pair (`architecture_synthesis.py` and
+`proposal_approval.py`) and the advisory supervision quartet
+(`supervisor_policy.py`, `supervision.py`, `supervisor_runtime.py`,
+`scripted_supervisor.py`) are each plain `application`/`infrastructure`
+modules, and supervision adds one table (`supervision_records`, migration v6)
+inside the existing persistence layer, so the baseline version and the rule set
+are unchanged: `v1.0 -> v1.1` still describes the only architecture change, and
+no version bump was needed for any of them.
+
+The last two are the concrete answer to the one question this step exists to
+settle: *an approved `ArchitectureProposal` for a managed project has no path to
+`ArchitectureVersion`*. `tests/test_architecture_synthesis.py` and
+`tests/test_proposal_approval.py` assert that from both directions - the modules'
+code never names an assistant-scoped repository or use-case (checked on the AST,
+not on prose), and after a full generate/reject/revision/approve cycle the
+`architecture_versions`, `architecture_change_requests`, `adrs` and `risks`
+tables are byte-identical.
+
+The supervision evidence is deliberately behavioural rather than structural,
+because its promise is about *what may happen*: `tests/test_supervision_gate.py`
+proves the fail-closed gate and both orchestrator gates, and
+`tests/test_supervisor_runtime.py` proves the cheap tick, the malformed
+deadlines, the send/reconcile protocol and the four human decisions - all
+against real file-backed SQLite and a real Cline channel with the offline
+scripted supervisor, so no test in that pair needs a provider, a key or a
+network. `tests/test_supervisor_policy.py` pins the send policy, and the panel's
+own surface is covered by `tests/test_gui_controller.py` (the Supervisor tab and
+its gating) and `tests/test_gui_core.py` (the core-thread API on a real
+database). The **disabled** mode has its own evidence at both levels: the
+`TestDisabledSupervision` class in `tests/test_supervision_gate.py` proves that a
+direct use-case call cannot analyse, reconcile, tick, decide or write anything,
+and `TestDisabledSupervisionIsEnforcedInCore` in `tests/test_gui_core.py` proves
+the same through the real core worker - no provider call, no row, no directive
+artifact, no supervision audit entry - while the enabled path stays unchanged.
+
 ---
 
 ## 10. V1.0 Scope
@@ -314,9 +667,18 @@ self-check has to be re-run to confirm compliance on the current tree.
   validated without code changes.
 - **File-backed SQLite** as the only runtime source of truth, together with the
   worker file channel and the report directory.
-- **Operator-supervised pilot usage.** A human seeds the plan, drives the loop,
-  approves or rejects gated steps, unblocks or resolves blockers, may pause and
-  resume the project, and never edits the database directly.
+- **Operator-supervised pilot usage.** A human imports the plan (validated, once,
+  atomically), drives the loop, approves or rejects gated steps, unblocks or
+  resolves blockers, may pause and resume the project, and never edits the
+  database directly.
+- **Supervision is opt-in and offline.** Advisory supervision is disabled unless
+  an operator asks for it (`--supervision` or `CompositionConfig(supervision=True)`),
+  and the wired supervisor needs no provider, no key and no network. While it is
+  disabled the application refuses every supervision activity outright - no
+  analysis, no provider call, no row, no directive, no audit entry - so the
+  switch is a real switch and not a display preference. The panel's polling
+  cadence (two seconds), the malformed deadlines and the operator constraints are
+  composition configuration, not stored state.
 
 ---
 
@@ -324,14 +686,31 @@ self-check has to be re-run to confirm compliance on the current tree.
 
 - **The AI evidence-conflict capability is not wired into the automatic loop.**
   The evidence merger, the decision engine and the judge are implemented and
-  tested, but no code path raises the `CONFLICT` state, so the deterministic
-  architecture rules remain the only verdict and no advisor can influence a
-  step in v1. (The approval gap that earlier reviews tracked as AQ-2 is **not**
-  an open limitation: v1.0 resolves it with `ApprovalGate`.)
-- **No CLI, daemon or supervisor implementation.** The loop is invoked through
-  the composition API; process restart and supervision are outside the product.
-- **No plan-ingestion UI or importer.** The step plan is seeded through the
-  storage port.
+  tested, and a run reaches all three through the explicit, read-only
+  architecture review - but no code path raises the `CONFLICT` state and nothing
+  in the loop consults an advisor, so the deterministic architecture rules remain
+  the only verdict and no advisor can influence a step. (The approval gap that
+  earlier reviews tracked as AQ-2 is **not** an open limitation: v1.0 resolves it
+  with `ApprovalGate`.)
+- **No CLI, no daemon, and no real supervisor provider.** The loop is invoked
+  through the composition API or the operator panel; there is no command-line
+  assistant, no service and no background process. Advisory supervision exists
+  and is wired end to end, but the only supervisor the composition constructs is
+  the **offline scripted double** (`infrastructure/scripted_supervisor.py`): a
+  real Codex (or any other) supervisor adapter is deliberately **not** part of
+  this step and must arrive later behind the same `SupervisorPort`. The runtime
+  is tick-driven - it owns no thread, no timer and no scheduler of its own; a
+  host (the panel, via `root.after`) calls one tick. Enabling supervision is a
+  per-session operator decision (`--supervision`); it is not persisted, so a
+  restart never silently changes it. Supervision is also **advisory only**: it
+  can delay a review, never authorize a `VERIFIED`, and with it disabled the loop
+  is byte-for-byte the pre-supervision loop - and the disabled state is enforced
+  by the *application* (no analysis, no provider call, no row, no directive, no
+  audit entry) rather than by the panel's button state.
+- **No plan replacement, merge or editing.** A plan enters the source of truth
+  once, through `PlanLoader` (or the panel's **Load Plan**): a database that
+  already holds steps refuses a second import, and nothing is merged, replaced,
+  renumbered or deleted. Plan authoring and step reordering are out of scope.
 - **No JSX analyzer yet.** The realization gate validates the Python source
   tree; language-specific analyzers are out of scope for v1.
 - **A crashed acknowledgement can leave an orphan report (F-1).** If the process
@@ -356,22 +735,39 @@ Architecture_assistant/
 ├── .gitignore                     ignores caches, .mini_build/, data/, reports/, *.db
 ├── README.md                      this document
 ├── src/
-│   └── architecture_assistant/
-│       ├── __init__.py            package metadata
-│       ├── domain/                enums.py  models.py  fsm.py  audit.py
-│       ├── ports/                 storage.py  repositories.py  transactions.py
-│       │                          capabilities.py
-│       ├── architecture/          model.py  scanner.py  rules.py  validator.py
-│       ├── application/           orchestrator.py  scheduler.py  loop_policy.py
-│       │                          context.py  realization_control.py
-│       │                          architecture_bootstrap.py
-│       │                          architecture_versioning.py
-│       │                          architecture_evolution.py  adr_manager.py
-│       │                          risk_manager.py  plugin_core.py
-│       │                          evidence_merger.py  decision_engine.py  judge.py
-│       │                          reporting.py  monitor.py  human_override.py
-│       │                          approval.py  dispatch.py
-│       └── composition/           root.py  realization.py  evidence.py  evolution.py
+│   ├── architecture_assistant/      the frozen core (the scanned tree)
+│   │   ├── __init__.py            package metadata
+│   │   ├── domain/                enums.py  models.py  fsm.py  audit.py
+│   │   ├── ports/                 storage.py  repositories.py  transactions.py
+│   │   │                          capabilities.py
+│   │   ├── architecture/          model.py  scanner.py  rules.py  validator.py
+│   │   ├── application/           orchestrator.py  scheduler.py  loop_policy.py
+│   │   │                          context.py  realization_control.py
+│   │   │                          architecture_bootstrap.py
+│   │   │                          architecture_versioning.py
+│   │   │                          architecture_evolution.py  adr_manager.py
+│   │   │                          risk_manager.py  plugin_core.py
+│   │   │                          evidence_merger.py  decision_engine.py  judge.py
+│   │   │                          reporting.py  monitor.py  human_override.py
+│   │   │                          approval.py  dispatch.py  plan_loader.py
+│   │   │                          architecture_review.py  eventlog.py
+│   │   │                          architecture_synthesis.py  proposal_approval.py
+│   │   │                          supervision.py  supervisor_policy.py
+│   │   │                          supervisor_runtime.py
+│   │   ├── infrastructure/        sqlite.py  storage.py  migrations.py  repositories.py
+│   │   │                          cline.py  scripted_supervisor.py  _http.py  cost.py
+│   │   │                          openai.py  claude.py  grok.py  openai_judge.py
+│   │   │                          _reporting.py  excel_reporting.py
+│   │   │                          markdown_reporting.py
+│   │   └── composition/           root.py  realization.py  evidence.py  evolution.py
+│   └── architecture_assistant_gui/  operator panel (external host, v1.1)
+│       ├── core.py                core-thread worker + background runner
+│       ├── controller.py          UI state machine + button matrix
+│       ├── views.py               Tk widgets (layout and rendering only)
+│       ├── app.py                 window, dialogs, plan preview, result pump
+│       └── __main__.py            python -m architecture_assistant_gui
+├── examples/
+│   └── plan_youtube_to_mp3.json   the pilot plan (real Phase values)
 └── tests/
     ├── test_fsm.py  test_models.py  test_capabilities.py  test_storage_port.py
     ├── test_repositories.py  test_migrations.py  test_audit_trail.py  test_context.py
@@ -386,6 +782,15 @@ Architecture_assistant/
     ├── test_cost_plugin.py  test_cost_composition.py
     ├── test_reporting.py  test_excel_reporting.py  test_markdown_reporting.py
     ├── test_monitor.py  test_human_override.py  test_approval_gate.py
+    ├── test_plan_loader.py        plan validation, identity, atomicity
+    ├── test_architecture_review.py  advisory three-advisor review
+    ├── test_architecture_synthesis.py  managed-project proposal synthesis
+    ├── test_proposal_approval.py    the proposal approval human write path
+    ├── test_supervision_gate.py     the fail-closed gate and the loop's two gates
+    ├── test_supervisor_runtime.py   the cheap tick, malformed deadlines, send protocol
+    ├── test_supervisor_policy.py    the deterministic send allowlist and denylist
+    ├── test_gui_logs.py        the log-event contract and the Logs tab
+    ├── test_gui_boundaries.py  test_gui_core.py  test_gui_controller.py
     ├── test_cline_worker.py  test_composition.py
     ├── test_recovery.py           crash/restart recovery suite
     └── _recovery_child.py         subprocess crash driver (not a pytest module)
@@ -417,3 +822,13 @@ architecture baseline stays at **v1.1** with its three deterministic rules, the
 workflow contracts and the persistence schema are frozen, the validation results
 in section 9 describe the freeze commit, and the limitations listed in section 11
 are accepted for this release.
+
+Beyond that release, the v1.1 working tree described in section 9 adds the
+operator panel, the plan loader, the advisory architecture review, the operator
+log, the side-by-side advisor layout, the managed-project architecture proposal
+and advisory supervision. None of them changes the architecture baseline, the
+rule set, the step transition table, the workflow outcomes or the meaning of
+`VERIFIED`; supervision adds exactly one table (`supervision_records`) and is
+**off by default**, so an existing database keeps behaving as it did before it
+existed. Nothing in this section is a release: no commit, tag or push has been
+made for the v1.1 work.

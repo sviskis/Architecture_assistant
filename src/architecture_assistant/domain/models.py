@@ -15,14 +15,19 @@ from typing import Any, ClassVar, Mapping, Optional
 from .enums import (
     ACRStatus,
     ADRStatus,
+    SUPERVISION_ALLOWING_STATUSES,
     DecisionStatus,
     Mode,
     Phase,
+    ProposalStatus,
     ReportStatus,
     RiskLevel,
     RiskStatus,
     Severity,
     StepState,
+    SupervisorAction,
+    SupervisorRisk,
+    SupervisorStatus,
     TaskState,
 )
 
@@ -32,6 +37,8 @@ __all__ = [
     "Task",
     "ArchitectureVersion",
     "ArchitectureChangeRequest",
+    "ArchitectureProposal",
+    "SupervisionRecord",
     "ADR",
     "Risk",
     "Finding",
@@ -122,6 +129,28 @@ def _freeze_tuple(value: Any, field_name: str) -> tuple:
             f"{field_name} must be a sequence of values, not a bare string"
         )
     return tuple(value)
+
+
+def _freeze_mappings(value: Any, field_name: str) -> tuple:
+    """Freeze a sequence of JSON-safe structured records.
+
+    A proposal section (a module, a risk, an ADR candidate, a phase) is a
+    structured record, so each entry must be a mapping - a bare string would
+    silently turn a record into one field and is refused here.
+    """
+    if value is None:
+        return ()
+    if isinstance(value, (str, bytes)):
+        raise ValueError(
+            f"{field_name} must be a sequence of mappings, not a bare string"
+        )
+    records = tuple(value)
+    for record in records:
+        if not isinstance(record, Mapping):
+            raise ValueError(
+                f"{field_name} entries must be mappings; got {record!r}"
+            )
+    return records
 
 
 class DomainModel:
@@ -506,6 +535,204 @@ class ArchitectureChangeRequest(DomainModel):
 
 
 @dataclass(frozen=True)
+class ArchitectureProposal(DomainModel):
+    """A **managed-project** architecture proposal - never a baseline.
+
+    Scope (the boundary this type exists to keep)
+    ---------------------------------------------
+    :class:`ArchitectureVersion` describes the architecture of the assistant
+    **itself**: it is declared in code and enforced by the deterministic
+    validator over the assistant's own source tree. This proposal describes the
+    architecture of the **project the assistant manages** (for example
+    ``youtube_to_mp3``). The two are deliberately unrelated:
+
+    * a proposal never becomes an :class:`ArchitectureVersion`;
+    * it never creates an :class:`ArchitectureChangeRequest`;
+    * it never writes an assistant ADR, an assistant risk or an assistant rule;
+    * it is never read by the realization gate.
+
+    ``ProposalStatus.APPROVED`` therefore means exactly one thing: *this is the
+    human-approved design for this managed project*. Everything the proposal
+    carries is advisory content until a human approves it, and even then it stays
+    project-scoped state. ``requirement`` is the operator's own text, echoed
+    **verbatim** - synthesis never rewrites it.
+
+    ``revision_no`` / ``revision_of`` are the proposal's own versioning: a
+    revision is a *new* row whose predecessor is marked
+    ``ProposalStatus.SUPERSEDED``, so all revisions are retained.
+    """
+
+    proposal_id: str
+    project: str
+    created_at: datetime
+    requirement: str
+    summary: str
+    source_review_id: str
+    fingerprint: str
+    modules: tuple[Mapping[str, Any], ...] = ()
+    data_flows: tuple[Mapping[str, Any], ...] = ()
+    external_dependencies: tuple[Mapping[str, Any], ...] = ()
+    architecture_rules: tuple[str, ...] = ()
+    proposed_rules: tuple[str, ...] = ()
+    risks: tuple[Mapping[str, Any], ...] = ()
+    adr_candidates: tuple[Mapping[str, Any], ...] = ()
+    implementation_phases: tuple[Mapping[str, Any], ...] = ()
+    unresolved_questions: tuple[str, ...] = ()
+    rationale: str = ""
+    review_digest: Mapping[str, Any] = field(default_factory=dict)
+    architecture_version: Optional[str] = None
+    revision_no: int = 1
+    revision_of: Optional[str] = None
+    status: ProposalStatus = ProposalStatus.DRAFT
+    decided_by: str = ""
+    decided_at: Optional[datetime] = None
+    decision_reason: str = ""
+    revision_feedback: str = ""
+    superseded_by: Optional[str] = None
+
+    _ENUM_FIELDS: ClassVar[Mapping[str, type]] = {"status": ProposalStatus}
+    _DATETIME_FIELDS: ClassVar[tuple[str, ...]] = ("created_at", "decided_at")
+    _TUPLE_FIELDS: ClassVar[tuple[str, ...]] = (
+        "modules",
+        "data_flows",
+        "external_dependencies",
+        "architecture_rules",
+        "proposed_rules",
+        "risks",
+        "adr_candidates",
+        "implementation_phases",
+        "unresolved_questions",
+    )
+    _MAPPING_FIELDS: ClassVar[tuple[str, ...]] = ("review_digest",)
+
+    def __post_init__(self) -> None:
+        for name in (
+            "proposal_id",
+            "project",
+            "requirement",
+            "summary",
+            "source_review_id",
+            "fingerprint",
+        ):
+            object.__setattr__(
+                self, name, _require_text(getattr(self, name), name)
+            )
+        object.__setattr__(
+            self, "created_at", _require_datetime(self.created_at, "created_at")
+        )
+        object.__setattr__(
+            self, "status", _coerce_enum(self.status, ProposalStatus, "status")
+        )
+        for name in (
+            "modules",
+            "data_flows",
+            "external_dependencies",
+            "risks",
+            "adr_candidates",
+            "implementation_phases",
+        ):
+            object.__setattr__(
+                self, name, _freeze_mappings(getattr(self, name), name)
+            )
+        for name in (
+            "architecture_rules",
+            "proposed_rules",
+            "unresolved_questions",
+        ):
+            object.__setattr__(
+                self, name, _freeze_tuple(getattr(self, name), name)
+            )
+        for rule in (*self.architecture_rules, *self.proposed_rules):
+            _require_text(rule, "rule text")
+        for question in self.unresolved_questions:
+            _require_text(question, "unresolved_questions entry")
+        object.__setattr__(self, "review_digest", dict(self.review_digest or {}))
+        object.__setattr__(
+            self,
+            "revision_no",
+            _require_int(self.revision_no, "revision_no", minimum=1),
+        )
+        if self.revision_no == 1:
+            if self.revision_of is not None:
+                raise ValueError(
+                    "revision_of must be None for the first revision "
+                    "(revision_no 1)"
+                )
+        else:
+            object.__setattr__(
+                self,
+                "revision_of",
+                _require_text(self.revision_of, "revision_of"),
+            )
+            if self.revision_of == self.proposal_id:
+                raise ValueError("a revision must not supersede itself")
+        object.__setattr__(
+            self, "decided_at", _optional_datetime(self.decided_at, "decided_at")
+        )
+        if self.decided_by and self.decided_at is None:
+            raise ValueError("decided_by requires decided_at")
+        if self.decided_at is not None and not self.decided_by.strip():
+            raise ValueError("decided_at requires decided_by")
+        if self.superseded_by is not None:
+            object.__setattr__(
+                self,
+                "superseded_by",
+                _require_text(self.superseded_by, "superseded_by"),
+            )
+            if self.status is not ProposalStatus.SUPERSEDED:
+                raise ValueError(
+                    f"status {self.status.value} must not carry superseded_by"
+                )
+        decided = (
+            ProposalStatus.APPROVED,
+            ProposalStatus.REJECTED,
+            ProposalStatus.REVISION_REQUESTED,
+        )
+        if self.status in decided:
+            if not self.decided_by.strip():
+                raise ValueError(
+                    f"status {self.status.value} requires decided_by"
+                )
+            if self.decided_at is None:
+                raise ValueError(
+                    f"status {self.status.value} requires decided_at"
+                )
+            if not self.decision_reason.strip():
+                raise ValueError(
+                    f"status {self.status.value} requires decision_reason"
+                )
+        elif self.status is ProposalStatus.DRAFT:
+            if self.decided_by or self.decided_at is not None:
+                raise ValueError("a DRAFT proposal must not carry a decision")
+        if (
+            self.status is ProposalStatus.REVISION_REQUESTED
+            and not self.revision_feedback.strip()
+        ):
+            raise ValueError(
+                "status REVISION_REQUESTED requires revision_feedback"
+            )
+
+    @property
+    def is_decided(self) -> bool:
+        """Whether a human already decided this proposal (any decision)."""
+        return self.status is not ProposalStatus.DRAFT
+
+    @property
+    def is_settled(self) -> bool:
+        """Whether nothing more can happen to this proposal.
+
+        ``APPROVED``, ``REJECTED`` and ``SUPERSEDED`` are settled; a ``DRAFT`` or
+        a ``REVISION_REQUESTED`` proposal is still open. This is the proposal's
+        own vocabulary - it never borrows the ACR lifecycle.
+        """
+        return self.status in (
+            ProposalStatus.APPROVED,
+            ProposalStatus.REJECTED,
+            ProposalStatus.SUPERSEDED,
+        )
+
+
+@dataclass(frozen=True)
 class ADR(DomainModel):
     """A versioned Architecture Decision Record."""
 
@@ -692,3 +919,184 @@ class Decision(DomainModel):
             self, "created_at", _require_datetime(self.created_at, "created_at")
         )
 
+
+@dataclass(frozen=True)
+class SupervisionRecord(DomainModel):
+    """One persisted supervision identity - one exact worker report.
+
+    The record is keyed by ``supervision_id``, which is derived from
+    ``(project, step_no, attempt, source_report_hash, architecture_version)`` and
+    from nothing else: not from the supervisor's answer, not from a reason, a
+    risk, an instruction or a timestamp. That is what makes the identity stable
+    across a restart *and* what makes a rewritten report a genuinely new record -
+    the decision taken for ``R1`` can never authorize ``R2``, because ``R2``
+    simply has a different row.
+
+    This state is **advisory bookkeeping, never authorization**: the record can
+    describe a recommended directive and a human decision about it, but it holds
+    no Step, no attempt counter and no baseline. The assistant's own tables stay
+    the single source of truth for the workflow, and nothing here is ever written
+    from a provider adapter.
+
+    ``first_seen_at`` is the report's own first-seen moment for *this* hash. For a
+    :attr:`SupervisorStatus.MALFORMED` record it doubles as the per-hash
+    stability anchor (the bytes never change without changing the hash), so the
+    absolute malformed deadline of one step/attempt is the **minimum**
+    ``first_seen_at`` across its malformed records - persisted, restart-safe and
+    deliberately never reset when the malformed bytes change.
+    """
+
+    supervision_id: str
+    project: str
+    step_no: int
+    attempt: int
+    source_report_hash: str
+    architecture_version: str
+    status: SupervisorStatus
+    action: Optional[SupervisorAction] = None
+    reason: str = ""
+    risk: Optional[SupervisorRisk] = None
+    instruction_for_cline: str = ""
+    requires_human: bool = False
+    provider: str = ""
+    cost_available: bool = False
+    evidence: tuple[str, ...] = ()
+    first_seen_at: datetime = field(default_factory=utc_now)
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+    decided_by: str = ""
+    decided_at: Optional[datetime] = None
+    decision_reason: str = ""
+    sent_at: Optional[datetime] = None
+    escalated_at: Optional[datetime] = None
+
+    _ENUM_FIELDS: ClassVar[Mapping[str, type]] = {
+        "status": SupervisorStatus,
+        "action": SupervisorAction,
+        "risk": SupervisorRisk,
+    }
+    _DATETIME_FIELDS: ClassVar[tuple[str, ...]] = (
+        "first_seen_at",
+        "created_at",
+        "updated_at",
+        "decided_at",
+        "sent_at",
+        "escalated_at",
+    )
+    _TUPLE_FIELDS: ClassVar[tuple[str, ...]] = ("evidence",)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "supervision_id",
+            _require_text(self.supervision_id, "supervision_id"),
+        )
+        object.__setattr__(
+            self, "project", _require_text(self.project, "project")
+        )
+        object.__setattr__(
+            self, "step_no", _require_int(self.step_no, "step_no", minimum=1)
+        )
+        object.__setattr__(
+            self, "attempt", _require_int(self.attempt, "attempt", minimum=1)
+        )
+        digest = self.source_report_hash
+        if (
+            not isinstance(digest, str)
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+        ):
+            raise ValueError(
+                "source_report_hash must be a 64-character lowercase SHA-256 "
+                f"hex digest; got {digest!r}"
+            )
+        object.__setattr__(
+            self,
+            "architecture_version",
+            _require_text(self.architecture_version, "architecture_version"),
+        )
+        object.__setattr__(
+            self,
+            "status",
+            _coerce_enum(self.status, SupervisorStatus, "status"),
+        )
+        object.__setattr__(
+            self,
+            "action",
+            _coerce_optional_enum(self.action, SupervisorAction, "action"),
+        )
+        object.__setattr__(
+            self,
+            "risk",
+            _coerce_optional_enum(self.risk, SupervisorRisk, "risk"),
+        )
+        object.__setattr__(self, "reason", self.reason or "")
+        object.__setattr__(
+            self, "instruction_for_cline", self.instruction_for_cline or ""
+        )
+        object.__setattr__(
+            self,
+            "requires_human",
+            _require_bool(self.requires_human, "requires_human"),
+        )
+        object.__setattr__(self, "provider", self.provider or "")
+        object.__setattr__(
+            self,
+            "cost_available",
+            _require_bool(self.cost_available, "cost_available"),
+        )
+        object.__setattr__(
+            self, "evidence", _freeze_tuple(self.evidence, "evidence")
+        )
+        for name in ("first_seen_at", "created_at", "updated_at"):
+            object.__setattr__(
+                self, name, _require_datetime(getattr(self, name), name)
+            )
+        for name in ("decided_at", "sent_at", "escalated_at"):
+            object.__setattr__(
+                self, name, _optional_datetime(getattr(self, name), name)
+            )
+        object.__setattr__(
+            self, "decided_by", self.decided_by or ""
+        )
+        object.__setattr__(
+            self, "decision_reason", self.decision_reason or ""
+        )
+        if self.status is SupervisorStatus.MALFORMED and self.instruction_for_cline:
+            raise ValueError(
+                "a MALFORMED record must not carry an instruction: the "
+                "supervisor is never asked about bytes it cannot describe"
+            )
+        if self.status is SupervisorStatus.REJECTED and (
+            not self.decided_by.strip() or not self.decision_reason.strip()
+        ):
+            raise ValueError(
+                "status REJECTED requires an explicit, audited human decision "
+                "(decided_by and decision_reason)"
+            )
+        if self.status is SupervisorStatus.WAIVED and not self.decided_by.strip():
+            raise ValueError(
+                "status WAIVED requires an explicit human decision (decided_by)"
+            )
+        if self.status is SupervisorStatus.SENT and self.sent_at is None:
+            raise ValueError("status SENT requires sent_at")
+        if (
+            self.status is SupervisorStatus.ESCALATED
+            and self.escalated_at is None
+        ):
+            raise ValueError("status ESCALATED requires escalated_at")
+
+    @property
+    def malformed(self) -> bool:
+        """Whether this record tracks bytes the worker contract refused."""
+        return self.status is SupervisorStatus.MALFORMED
+
+    @property
+    def blocks(self) -> bool:
+        """Whether this record still blocks the authoritative review."""
+        return self.status not in SUPERVISION_ALLOWING_STATUSES
+
+    @property
+    def has_directive(self) -> bool:
+        """Whether this record carries a directive worth delivering."""
+        return bool(self.instruction_for_cline.strip())

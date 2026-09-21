@@ -1,6 +1,6 @@
 """Tests for the StoragePort facade and its SQLite implementation.
 
-Verifies that the facade is a pure aggregation boundary: ten typed accessors
+Verifies that the facade is a pure aggregation boundary: twelve typed accessors
 plus the **reused** Step 5 transaction boundary, with no business logic and no
 second transaction semantics.
 """
@@ -70,6 +70,8 @@ ACCESSORS = (
     "findings",
     "decisions",
     "audit",
+    "proposals",
+    "supervisions",
 )
 
 
@@ -317,4 +319,3 @@ class TestFacadeRoundTrips:
             "SELECT COUNT(*) FROM audit_entries"
         ).fetchone()[0]
         assert rows == 1
-

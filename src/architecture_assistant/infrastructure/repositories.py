@@ -18,16 +18,25 @@ from enum import Enum
 from typing import Any, Mapping, Optional, Sequence
 
 from ..domain.audit import AuditEntityType, AuditEntry
-from ..domain.enums import ACRStatus, RiskStatus, StepState
+from ..domain.enums import (
+    ACRStatus,
+    SUPERVISION_RECONCILE_STATUSES,
+    ProposalStatus,
+    RiskStatus,
+    StepState,
+    SupervisorStatus,
+)
 from ..domain.models import (
     ADR,
     ArchitectureChangeRequest,
+    ArchitectureProposal,
     ArchitectureVersion,
     Decision,
     Finding,
     Project,
     Risk,
     Step,
+    SupervisionRecord,
     Task,
 )
 from ..ports.repositories import TaskKey
@@ -38,6 +47,8 @@ __all__ = [
     "SqliteTaskRepository",
     "SqliteArchitectureVersionRepository",
     "SqliteArchitectureChangeRequestRepository",
+    "SqliteArchitectureProposalRepository",
+    "SqliteSupervisionRepository",
     "SqliteADRRepository",
     "SqliteRiskRepository",
     "SqliteFindingRepository",
@@ -217,6 +228,38 @@ def _row_to_architecture_change_request(
         approved_by=row["approved_by"],
         approved_at=_parse_dt(row["approved_at"]),
         applied_at=_parse_dt(row["applied_at"]),
+    )
+
+
+def _row_to_architecture_proposal(row: sqlite3.Row) -> ArchitectureProposal:
+    return ArchitectureProposal(
+        proposal_id=row["proposal_id"],
+        project=row["project"],
+        created_at=_parse_dt(row["created_at"]),
+        requirement=row["requirement"],
+        summary=row["summary"],
+        source_review_id=row["source_review_id"],
+        fingerprint=row["fingerprint"],
+        modules=_json_load_seq(row["modules"]),
+        data_flows=_json_load_seq(row["data_flows"]),
+        external_dependencies=_json_load_seq(row["external_dependencies"]),
+        architecture_rules=_json_load_seq(row["architecture_rules"]),
+        proposed_rules=_json_load_seq(row["proposed_rules"]),
+        risks=_json_load_seq(row["risks"]),
+        adr_candidates=_json_load_seq(row["adr_candidates"]),
+        implementation_phases=_json_load_seq(row["implementation_phases"]),
+        unresolved_questions=_json_load_seq(row["unresolved_questions"]),
+        rationale=row["rationale"],
+        review_digest=_json_load_map(row["review_digest"]),
+        architecture_version=row["architecture_version"],
+        revision_no=row["revision_no"],
+        revision_of=row["revision_of"],
+        status=row["status"],
+        decided_by=row["decided_by"],
+        decided_at=_parse_dt(row["decided_at"]),
+        decision_reason=row["decision_reason"],
+        revision_feedback=row["revision_feedback"],
+        superseded_by=row["superseded_by"],
     )
 
 
@@ -612,6 +655,141 @@ class SqliteArchitectureChangeRequestRepository(_SqliteRepository):
         )
 
 
+class SqliteArchitectureProposalRepository(_SqliteRepository):
+    """SQLite adapter for **managed-project** proposals (key: ``proposal_id``).
+
+    Project-scoped by construction: the adapter stores a design for the project
+    the assistant manages and never touches ``architecture_versions``,
+    ``architecture_change_requests``, ``adrs`` or ``risks``.
+    """
+
+    _UPSERT = """
+        INSERT INTO architecture_proposals (
+            proposal_id, project, created_at, requirement, summary,
+            source_review_id, fingerprint, modules, data_flows,
+            external_dependencies, architecture_rules, proposed_rules, risks,
+            adr_candidates, implementation_phases, unresolved_questions,
+            rationale, review_digest, architecture_version, revision_no,
+            revision_of, status, decided_by, decided_at, decision_reason,
+            revision_feedback, superseded_by
+        ) VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?
+        )
+        ON CONFLICT(proposal_id) DO UPDATE SET
+            project = excluded.project,
+            created_at = excluded.created_at,
+            requirement = excluded.requirement,
+            summary = excluded.summary,
+            source_review_id = excluded.source_review_id,
+            fingerprint = excluded.fingerprint,
+            modules = excluded.modules,
+            data_flows = excluded.data_flows,
+            external_dependencies = excluded.external_dependencies,
+            architecture_rules = excluded.architecture_rules,
+            proposed_rules = excluded.proposed_rules,
+            risks = excluded.risks,
+            adr_candidates = excluded.adr_candidates,
+            implementation_phases = excluded.implementation_phases,
+            unresolved_questions = excluded.unresolved_questions,
+            rationale = excluded.rationale,
+            review_digest = excluded.review_digest,
+            architecture_version = excluded.architecture_version,
+            revision_no = excluded.revision_no,
+            revision_of = excluded.revision_of,
+            status = excluded.status,
+            decided_by = excluded.decided_by,
+            decided_at = excluded.decided_at,
+            decision_reason = excluded.decision_reason,
+            revision_feedback = excluded.revision_feedback,
+            superseded_by = excluded.superseded_by
+    """
+
+    def upsert(self, proposal: ArchitectureProposal) -> None:
+        self._upsert(
+            self._UPSERT,
+            (
+                proposal.proposal_id,
+                proposal.project,
+                _iso(proposal.created_at),
+                proposal.requirement,
+                proposal.summary,
+                proposal.source_review_id,
+                proposal.fingerprint,
+                _json_dump_seq(proposal.modules),
+                _json_dump_seq(proposal.data_flows),
+                _json_dump_seq(proposal.external_dependencies),
+                _json_dump_seq(proposal.architecture_rules),
+                _json_dump_seq(proposal.proposed_rules),
+                _json_dump_seq(proposal.risks),
+                _json_dump_seq(proposal.adr_candidates),
+                _json_dump_seq(proposal.implementation_phases),
+                _json_dump_seq(proposal.unresolved_questions),
+                proposal.rationale,
+                _json_dump_map(proposal.review_digest),
+                proposal.architecture_version,
+                proposal.revision_no,
+                proposal.revision_of,
+                _enum_value(proposal.status),
+                proposal.decided_by,
+                _iso(proposal.decided_at),
+                proposal.decision_reason,
+                proposal.revision_feedback,
+                proposal.superseded_by,
+            ),
+        )
+
+    def get(self, proposal_id: str) -> Optional[ArchitectureProposal]:
+        return self._fetch_one(
+            "SELECT * FROM architecture_proposals WHERE proposal_id = ?",
+            (proposal_id,),
+            _row_to_architecture_proposal,
+        )
+
+    def list(self) -> tuple[ArchitectureProposal, ...]:
+        return self._fetch_all(
+            "SELECT * FROM architecture_proposals "
+            "ORDER BY created_at ASC, proposal_id ASC",
+            (),
+            _row_to_architecture_proposal,
+        )
+
+    def list_by_status(
+        self, status: ProposalStatus
+    ) -> tuple[ArchitectureProposal, ...]:
+        """Proposals in one lifecycle status, oldest first.
+
+        Accepts a :class:`ProposalStatus` or its plain string value, exactly
+        like every other adapter query in this module.
+        """
+        return self._fetch_all(
+            "SELECT * FROM architecture_proposals "
+            "WHERE status = ? ORDER BY created_at ASC, proposal_id ASC",
+            (_enum_value(status),),
+            _row_to_architecture_proposal,
+        )
+
+    def list_for_project(self, project: str) -> tuple[ArchitectureProposal, ...]:
+        """The proposals of one managed project, oldest first."""
+        return self._fetch_all(
+            "SELECT * FROM architecture_proposals "
+            "WHERE project = ? ORDER BY created_at ASC, proposal_id ASC",
+            (project,),
+            _row_to_architecture_proposal,
+        )
+
+    def delete(self, proposal_id: str) -> bool:
+        """Delete a proposal row.
+
+        Present for contract consistency with the other repositories only: the
+        proposal use-cases never delete, so a proposal stays auditable forever.
+        """
+        return self._delete(
+            "DELETE FROM architecture_proposals WHERE proposal_id = ?",
+            (proposal_id,),
+        )
+
+
 class SqliteADRRepository(_SqliteRepository):
     """SQLite adapter for Architecture Decision Records (key: ``id``)."""
 
@@ -871,3 +1049,210 @@ class SqliteAuditRepository(_SqliteRepository):
             _row_to_audit_entry,
         )
 
+
+def _row_to_supervision_record(row: sqlite3.Row) -> SupervisionRecord:
+    return SupervisionRecord(
+        supervision_id=row["supervision_id"],
+        project=row["project"],
+        step_no=row["step_no"],
+        attempt=row["attempt"],
+        source_report_hash=row["source_report_hash"],
+        architecture_version=row["architecture_version"],
+        status=row["status"],
+        action=row["action"],
+        reason=row["reason"],
+        risk=row["risk"],
+        instruction_for_cline=row["instruction_for_cline"],
+        requires_human=bool(row["requires_human"]),
+        provider=row["provider"],
+        cost_available=bool(row["cost_available"]),
+        evidence=_json_load_seq(row["evidence"]),
+        first_seen_at=_parse_dt(row["first_seen_at"]),
+        created_at=_parse_dt(row["created_at"]),
+        updated_at=_parse_dt(row["updated_at"]),
+        decided_by=row["decided_by"],
+        decided_at=_parse_dt(row["decided_at"]),
+        decision_reason=row["decision_reason"],
+        sent_at=_parse_dt(row["sent_at"]),
+        escalated_at=_parse_dt(row["escalated_at"]),
+    )
+
+
+class SqliteSupervisionRepository(_SqliteRepository):
+    """SQLite adapter for **supervision records** (key: ``supervision_id``).
+
+    Advisory bookkeeping only: the adapter writes one table
+    (``supervision_records``) and never touches ``steps``, ``tasks``,
+    ``projects``, ``architecture_versions``, ``adrs``, ``risks`` or
+    ``architecture_change_requests`` - a supervisor's recommendation is not
+    workflow state and can never move the FSM.
+    """
+
+    _UPSERT = """
+        INSERT INTO supervision_records (
+            supervision_id, project, step_no, attempt, source_report_hash,
+            architecture_version, status, action, reason, risk,
+            instruction_for_cline, requires_human, provider, cost_available,
+            evidence, first_seen_at, created_at, updated_at, decided_by,
+            decided_at, decision_reason, sent_at, escalated_at
+        ) VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ?
+        )
+        ON CONFLICT(supervision_id) DO UPDATE SET
+            project = excluded.project,
+            step_no = excluded.step_no,
+            attempt = excluded.attempt,
+            source_report_hash = excluded.source_report_hash,
+            architecture_version = excluded.architecture_version,
+            status = excluded.status,
+            action = excluded.action,
+            reason = excluded.reason,
+            risk = excluded.risk,
+            instruction_for_cline = excluded.instruction_for_cline,
+            requires_human = excluded.requires_human,
+            provider = excluded.provider,
+            cost_available = excluded.cost_available,
+            evidence = excluded.evidence,
+            first_seen_at = excluded.first_seen_at,
+            created_at = excluded.created_at,
+            updated_at = excluded.updated_at,
+            decided_by = excluded.decided_by,
+            decided_at = excluded.decided_at,
+            decision_reason = excluded.decision_reason,
+            sent_at = excluded.sent_at,
+            escalated_at = excluded.escalated_at
+    """
+
+    def upsert(self, record: SupervisionRecord) -> None:
+        self._upsert(
+            self._UPSERT,
+            (
+                record.supervision_id,
+                record.project,
+                record.step_no,
+                record.attempt,
+                record.source_report_hash,
+                record.architecture_version,
+                _enum_value(record.status),
+                _enum_value(record.action),
+                record.reason,
+                _enum_value(record.risk),
+                record.instruction_for_cline,
+                _bool_int(record.requires_human),
+                record.provider,
+                _bool_int(record.cost_available),
+                _json_dump_seq(record.evidence),
+                _iso(record.first_seen_at),
+                _iso(record.created_at),
+                _iso(record.updated_at),
+                record.decided_by,
+                _iso(record.decided_at),
+                record.decision_reason,
+                _iso(record.sent_at),
+                _iso(record.escalated_at),
+            ),
+        )
+
+    def get(self, supervision_id: str) -> Optional[SupervisionRecord]:
+        return self._fetch_one(
+            "SELECT * FROM supervision_records WHERE supervision_id = ?",
+            (supervision_id,),
+            _row_to_supervision_record,
+        )
+
+    def find_current(
+        self,
+        project: str,
+        step_no: int,
+        attempt: int,
+        source_report_hash: str,
+        architecture_version: str,
+    ) -> Optional[SupervisionRecord]:
+        """The record for one exact supervision identity, or ``None``.
+
+        The five columns are the identity, and the unique index over them is what
+        makes "one record per exact report" a database-level guarantee rather
+        than a convention.
+        """
+        return self._fetch_one(
+            "SELECT * FROM supervision_records WHERE project = ? "
+            "AND step_no = ? AND attempt = ? AND source_report_hash = ? "
+            "AND architecture_version = ?",
+            (
+                project,
+                step_no,
+                attempt,
+                source_report_hash,
+                architecture_version,
+            ),
+            _row_to_supervision_record,
+        )
+
+    def list(self) -> tuple[SupervisionRecord, ...]:
+        return self._fetch_all(
+            "SELECT * FROM supervision_records "
+            "ORDER BY created_at ASC, rowid ASC",
+            (),
+            _row_to_supervision_record,
+        )
+
+    def list_for_step(
+        self, project: str, step_no: int, attempt: int
+    ) -> tuple[SupervisionRecord, ...]:
+        """Every record of one step/attempt, oldest first.
+
+        Ordered by ``(created_at, rowid)``: the moment the identity appeared, and
+        then the order the rows were written. The insert order is what makes
+        "which report came last" answerable even when two identities share one
+        clock reading - which is exactly what a frozen test clock (or two
+        reports inside one second) produces.
+        """
+        return self._fetch_all(
+            "SELECT * FROM supervision_records WHERE project = ? "
+            "AND step_no = ? AND attempt = ? "
+            "ORDER BY created_at ASC, rowid ASC",
+            (project, step_no, attempt),
+            _row_to_supervision_record,
+        )
+
+    def list_by_status(
+        self, status: SupervisorStatus
+    ) -> tuple[SupervisionRecord, ...]:
+        return self._fetch_all(
+            "SELECT * FROM supervision_records WHERE status = ? "
+            "ORDER BY created_at ASC, rowid ASC",
+            (_enum_value(status),),
+            _row_to_supervision_record,
+        )
+
+    def list_unresolved(self) -> tuple[SupervisionRecord, ...]:
+        """The records a restart must reconcile, oldest first.
+
+        Exactly :data:`~architecture_assistant.domain.enums.SUPERVISION_RECONCILE_STATUSES`:
+        an analysis that was owed when the process died, and a send intent whose
+        publication may or may not have completed.
+        """
+        pending = sorted(
+            member.value for member in SUPERVISION_RECONCILE_STATUSES
+        )
+        placeholders = ", ".join("?" for _ in pending)
+        return self._fetch_all(
+            "SELECT * FROM supervision_records "
+            f"WHERE status IN ({placeholders}) "
+            "ORDER BY created_at ASC, rowid ASC",
+            tuple(pending),
+            _row_to_supervision_record,
+        )
+
+    def delete(self, supervision_id: str) -> bool:
+        """Delete a supervision row.
+
+        Present for contract consistency with the other repositories only: the
+        supervision use-cases never delete, so the supervision history of an
+        attempt stays auditable forever.
+        """
+        return self._delete(
+            "DELETE FROM supervision_records WHERE supervision_id = ?",
+            (supervision_id,),
+        )
