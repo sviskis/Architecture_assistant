@@ -14,7 +14,7 @@ layout store and the application - no widget here opens a file.
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import scrolledtext, ttk
+from tkinter import ttk
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 from .controller import (
@@ -26,6 +26,8 @@ from .controller import (
     POPUP_AUDIT,
     POPUP_CONFLICTS,
     POPUP_COST,
+    POPUP_DECISION,
+    POPUP_EVIDENCE,
     POPUP_JUDGE,
     POPUP_LOGS,
     POPUP_PROJECT,
@@ -44,9 +46,9 @@ __all__ = [
     "MAIN_SPLIT_TOP_START_SHARE",
     "MIN_ON_SCREEN_EDGE",
     "PROPOSAL_SPLIT_MIN_SIZE",
-    "REVIEW_RESULT_SPLIT_MIN_SIZE",
-    "REVIEW_SECTION_SPLIT_MIN_SIZE",
     "REVIEW_SPLIT_MIN_SIZE",
+    "REVIEW_SUMMARY_BUTTONS",
+    "REVIEW_SUMMARY_ROWS",
     "SPLIT_KEYS",
     "SUPERVISOR_SPLIT_MIN_SIZE",
     "UTILITY_BUTTONS",
@@ -155,8 +157,6 @@ PROPOSAL_HISTORY_COLUMNS: tuple[tuple[str, str, int], ...] = (
 #: finished drag instead of by an option this Tk would reject.
 MAIN_SPLIT_MIN_SIZE = 150
 REVIEW_SPLIT_MIN_SIZE = 90
-REVIEW_RESULT_SPLIT_MIN_SIZE = 70
-REVIEW_SECTION_SPLIT_MIN_SIZE = 60
 ADVISOR_SPLIT_MIN_SIZE = 180
 SUPERVISOR_SPLIT_MIN_SIZE = 160
 PROPOSAL_SPLIT_MIN_SIZE = 130
@@ -186,13 +186,31 @@ SPLIT_KEYS: tuple[str, ...] = (
     "main",
     "review",
     "review_advisors",
-    "review_results",
-    "review_bottom",
-    "review_merged",
-    "review_judge",
     "supervisor",
     "proposal",
     "deliberation",
+)
+
+#: The whole lower half of the Architecture Review tab: one value per row and one
+#: button per value. The pairs are ``(Tk variable, review view-model key)``, so a
+#: summary line and the data behind it can never drift apart, and the order here
+#: is the order on screen.
+REVIEW_SUMMARY_ROWS: tuple[tuple[str, str], ...] = (
+    ("review_evidence_line", "evidence_line"),
+    ("review_conflicts_line", "conflicts_line"),
+    ("review_judge_line", "judge_line"),
+    ("review_decision_line", "decision_line"),
+    ("review_cost_line", "cost_line"),
+)
+
+#: One button per summary value, in the same order: every one of them opens the
+#: window that holds the full information (the same popup every other view uses).
+REVIEW_SUMMARY_BUTTONS: tuple[tuple[str, str], ...] = (
+    (POPUP_EVIDENCE, "Evidence"),
+    (POPUP_CONFLICTS, "Conflicts"),
+    (POPUP_JUDGE, "Judge"),
+    (POPUP_DECISION, "Decision"),
+    (POPUP_COST, "Cost"),
 )
 
 #: The four compact rows one advisor pane keeps. Everything else about the
@@ -300,7 +318,7 @@ class MainWindow:
     ) -> None:
         self._root = root
         #: The layout the host remembered (window geometry, the open tab, one
-        #: sash list per splitter, one geometry per popup title). Only ever read
+        #: sash list per splitter, one geometry per popup window key). Only ever read
         #: through ``_saved_sashes``, ``_restore_saved_tab`` and the host's own
         #: popup geometry lookup, which validate what they touch: a damaged
         #: layout costs the operator a default, never a working panel.
@@ -322,11 +340,6 @@ class MainWindow:
         self._top_area: Any = None
         self._notebook: Any = None
         self._review_split: Any = None
-        self._review_bottom_split: Any = None
-        self._review_results_split: Any = None
-        #: The two vertical splitters inside the shared results: merged evidence
-        #: over conflicts, and the judge over the advisory decision.
-        self._review_section_splits: list[Any] = []
         self._proposal_split: Any = None
         self._supervisor_split: Any = None
         self._supervisor_frames: dict[str, Any] = {}
@@ -355,17 +368,15 @@ class MainWindow:
         #: One entry per advisor pane, built and rebuilt only when the number of
         #: advisors changes (in practice: once, at startup).
         self._panes: list[dict[str, Any]] = []
-        self._merged: Any = None
-        #: The compact sections the tab keeps instead of a table: the conflict
-        #: count, the judge line and the review's total cost, each with the button
-        #: that opens its detail window.
-        self._review_conflicts: Any = None
-        self._conflicts_button: Any = None
-        self._judge: Any = None
-        self._judge_button: Any = None
-        self._decision: Any = None
-        self._cost: Any = None
-        self._cost_button: Any = None
+        #: The whole lower half of the review tab: one compact panel holding the
+        #: five summary values and the five buttons that open the detail windows,
+        #: plus the small empty state shown before the first review. There is no
+        #: table, no text panel and no splitter in it any more.
+        self._review_summary: Any = None
+        self._review_values: Any = None
+        self._review_buttons_frame: Any = None
+        self._review_empty: Any = None
+        self._review_buttons: dict[str, Any] = {}
         #: The Architecture Proposal tab: the managed project's design. All
         #: read-only tables plus the two operator inputs the tab collects.
         self._proposal_requirement_field: Any = None
@@ -436,25 +447,9 @@ class MainWindow:
         )
         self._place_split_start(
             "review",
-            _fraction_sashes(0.12, 0.55),
+            _fraction_sashes(0.12),
             REVIEW_SPLIT_MIN_SIZE,
         )
-        self._place_split_start(
-            "review_results",
-            _fraction_sashes(0.5),
-            REVIEW_RESULT_SPLIT_MIN_SIZE,
-        )
-        self._place_split_start(
-            "review_bottom",
-            _fraction_sashes(0.72),
-            REVIEW_RESULT_SPLIT_MIN_SIZE,
-        )
-        for key in ("review_merged", "review_judge"):
-            self._place_split_start(
-                key,
-                _fraction_sashes(0.5),
-                REVIEW_SECTION_SPLIT_MIN_SIZE,
-            )
         self._place_split_start(
             "supervisor",
             _fraction_sashes(*_even_sashes(3)),
@@ -758,18 +753,19 @@ class MainWindow:
         return table
 
     def _build_review_tab(self, notebook: Any) -> None:
-        """The Architecture Review tab: question, header, three advisor panes, shared results.
+        """The Architecture Review tab: question, header, three advisor panes, one summary.
 
         The layout is the point of this tab: the three advisors sit **side by
         side in one window** so their answers can be read against each other, and
-        everything that is *shared* - merged evidence, conflicts, the judge, the
-        advisory decision and the cost - sits below them.
+        everything that is *shared* - the merged evidence, the conflicts, the
+        judge, the advisory decision and the cost - is now **one compact summary
+        line** under them, with the full information in a window of its own.
 
-        Every one of those regions sits in a draggable splitter: question and
-        header on top, the advisor panes in the middle, the shared results and
-        the cost at the bottom. The three advisor panes are the panes of their
+        Two panes, one splitter: the question and header on top and the advisor
+        area below, which itself holds the three advisor panes (the panes of their
         own horizontal splitter, so one advisor can be widened without touching
-        the other two.
+        the other two) and the summary at the bottom of the same pane. There is no
+        second, lower splitter any more - the advisors own the height.
         """
         frame = ttk.Frame(notebook, padding=6)
         frame.columnconfigure(0, weight=1)
@@ -817,173 +813,30 @@ class MainWindow:
             height=9,
         )
 
-        # -- the three advisors, side by side ------------------------------
+        # -- the advisors, with the compact review summary below them -------
+        # Both live in **one** pane of the splitter: the three advisor panes grow
+        # with it, and the summary costs two short rows under them instead of the
+        # two splitters, six frames and five sections it used to - so the advisors
+        # get the height back. Nothing below the advisors is a splitter any more.
+        lower = ttk.Frame(split)
+        lower.columnconfigure(0, weight=1)
+        lower.rowconfigure(0, weight=1)
+        _add_pane(split, lower, REVIEW_SPLIT_MIN_SIZE, weight=2)
+
         panes_frame = ttk.LabelFrame(
-            split,
+            lower,
             text="Advisor responses (read-only, side by side)",
             padding=(6, 4),
         )
+        panes_frame.grid(row=0, column=0, sticky="nsew")
         panes_frame.columnconfigure(0, weight=1)
         panes_frame.rowconfigure(0, weight=1)
-        _add_pane(split, panes_frame, REVIEW_SPLIT_MIN_SIZE, weight=2)
         # One horizontal splitter for the advisors: each pane is dragged on its
         # own, so OpenAI can be widened without touching Claude or Grok.
         self._panes_frame = ttk.PanedWindow(panes_frame, orient="horizontal")
         self._panes_frame.grid(row=0, column=0, sticky="nsew")
 
-        # -- the shared results, below them --------------------------------
-        # The bottom region is a splitter of its own: the merged results above,
-        # the cost of the review below - each can be given the height it needs.
-        bottom = ttk.PanedWindow(split, orient="vertical")
-        _add_pane(split, bottom, REVIEW_SPLIT_MIN_SIZE, weight=2)
-        self._review_bottom_split = bottom
-
-        results = ttk.PanedWindow(bottom, orient="horizontal")
-        _add_pane(bottom, results, REVIEW_RESULT_SPLIT_MIN_SIZE, weight=3)
-        self._review_results_split = results
-
-        left = ttk.PanedWindow(results, orient="vertical")
-        _add_pane(
-            results, left, REVIEW_RESULT_SPLIT_MIN_SIZE, weight=1
-        )
-        right = ttk.PanedWindow(results, orient="vertical")
-        _add_pane(
-            results, right, REVIEW_RESULT_SPLIT_MIN_SIZE, weight=1
-        )
-        self._review_section_splits = [left, right]
-
-        merged_frame = ttk.LabelFrame(
-            left, text="Merged evidence", padding=(6, 4)
-        )
-        merged_frame.columnconfigure(0, weight=1)
-        merged_frame.rowconfigure(0, weight=1)
-        _add_pane(
-            left, merged_frame, REVIEW_SECTION_SPLIT_MIN_SIZE, weight=1
-        )
-        self._merged = self._table_in(
-            merged_frame,
-            tuple(key for key, _h, _w in FACT_COLUMNS),
-            columns=FACT_COLUMNS,
-            height=8,
-        )
-
-        conflicts_frame = ttk.LabelFrame(
-            left, text="Evidence conflicts", padding=(6, 4)
-        )
-        conflicts_frame.columnconfigure(0, weight=1)
-        _add_pane(
-            left, conflicts_frame, REVIEW_SECTION_SPLIT_MIN_SIZE, weight=1
-        )
-        # One compact line and one button: an empty conflict list must not hold a
-        # large table, so the count is the whole visible cost of having none.
-        conflicts_row = ttk.Frame(conflicts_frame)
-        conflicts_row.grid(row=0, column=0, sticky="new")
-        self._review_conflicts = conflicts_row
-        ttk.Label(
-            conflicts_row,
-            textvariable=self._var("review_conflicts_summary"),
-            font=("", 9, "bold"),
-        ).grid(row=0, column=0, sticky="w")
-        self._conflicts_button = ttk.Button(
-            conflicts_row,
-            text="View Conflicts",
-            command=lambda: self._on_action(POPUP_CONFLICTS),
-        )
-        self._conflicts_button.grid(row=0, column=1, sticky="w", padx=(6, 0))
-        self.buttons.setdefault(POPUP_CONFLICTS, self._conflicts_button)
-        ttk.Label(
-            conflicts_frame,
-            text=(
-                "A conflict is explicit metadata two advisors declared over one "
-                "anchor - never inferred from wording, severity or overlap."
-            ),
-            wraplength=420,
-            justify="left",
-        ).grid(row=1, column=0, sticky="nw")
-
-        judge_frame = ttk.LabelFrame(
-            right, text="Judge result (a separate layer)", padding=(6, 4)
-        )
-        judge_frame.columnconfigure(0, weight=1)
-        _add_pane(
-            right, judge_frame, REVIEW_SECTION_SPLIT_MIN_SIZE, weight=1
-        )
-        # The judge is advisory and usually absent, so its panel is a single
-        # honest line: it never reserves a text area for a result that does not
-        # exist, and the full output is one button away.
-        judge_row = ttk.Frame(judge_frame)
-        judge_row.grid(row=0, column=0, sticky="new")
-        self._judge = judge_row
-        ttk.Label(
-            judge_row,
-            textvariable=self._var("review_judge_summary"),
-            font=("", 9, "bold"),
-        ).grid(row=0, column=0, sticky="w")
-        self._judge_button = ttk.Button(
-            judge_row,
-            text="View Judge Details",
-            command=lambda: self._on_action(POPUP_JUDGE),
-        )
-        self._judge_button.grid(row=0, column=1, sticky="w", padx=(6, 0))
-        self.buttons.setdefault(POPUP_JUDGE, self._judge_button)
-        ttk.Label(
-            judge_frame,
-            text=(
-                "The judge only explains an explicitly declared evidence "
-                "conflict; it never replaces the deterministic verdict."
-            ),
-            wraplength=420,
-            justify="left",
-        ).grid(row=1, column=0, sticky="nw")
-
-        decision_frame = ttk.LabelFrame(
-            right,
-            text="Advisory decision (explains, never overrides)",
-            padding=(6, 4),
-        )
-        decision_frame.columnconfigure(0, weight=1)
-        decision_frame.rowconfigure(0, weight=1)
-        _add_pane(
-            right, decision_frame, REVIEW_SECTION_SPLIT_MIN_SIZE, weight=1
-        )
-        self._decision = scrolledtext.ScrolledText(
-            decision_frame, height=7, wrap="word"
-        )
-        self._decision.grid(row=0, column=0, sticky="nsew")
-        self._decision.configure(state="disabled")
-
-        cost_frame = ttk.LabelFrame(
-            bottom, text="Cost of this review", padding=(6, 4)
-        )
-        _add_pane(bottom, cost_frame, REVIEW_RESULT_SPLIT_MIN_SIZE, weight=1)
-        cost_frame.columnconfigure(0, weight=1)
-        # A single total line plus one button. The detail - per provider, the
-        # judge, the records and the unavailable state - lives in the popup, so
-        # the tab never spends a table on it.
-        cost_row = ttk.Frame(cost_frame)
-        cost_row.grid(row=0, column=0, sticky="ew")
-        self._cost = cost_row
-        ttk.Label(
-            cost_row,
-            textvariable=self._var("review_total_cost"),
-            font=("", 9, "bold"),
-        ).grid(row=0, column=0, sticky="w")
-        self._cost_button = ttk.Button(
-            cost_row,
-            text="Cost Details",
-            command=lambda: self._on_action(POPUP_COST),
-        )
-        self._cost_button.grid(row=0, column=1, sticky="w", padx=(6, 0))
-        self.buttons.setdefault(POPUP_COST, self._cost_button)
-        ttk.Label(
-            cost_frame,
-            text=(
-                "Cost telemetry is reported by the core; when it is unavailable "
-                "this line says so and no amount is invented."
-            ),
-            wraplength=700,
-            justify="left",
-        ).grid(row=1, column=0, sticky="w")
+        self._build_review_summary(lower)
 
         ttk.Label(
             frame, textvariable=self._var("review_progress"), foreground="#a05000"
@@ -1002,6 +855,59 @@ class MainWindow:
             justify="left",
         ).grid(row=3, column=0, sticky="ew")
         notebook.add(frame, text="Architecture Review")
+
+    def _build_review_summary(self, parent: Any) -> None:
+        """The whole lower half of the review tab: five values, five buttons.
+
+        Evidence, conflicts, the judge, the decision and the cost used to be five
+        permanent sections - two tables, two text panels and a frame, each in its
+        own splitter pane - and they cost the advisor panes most of their height.
+        They are one compact panel now: a single line of five short values with
+        one button per value, each opening the window that holds the full
+        information. Before the first review the panel is a small empty state
+        instead - no empty table, no invented count, no reserved blank area.
+        """
+        panel = ttk.LabelFrame(parent, text="Review summary", padding=(6, 4))
+        panel.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        panel.columnconfigure(0, weight=1)
+        self._review_summary = panel
+
+        # One line: the five values, in the order of ``REVIEW_SUMMARY_ROWS``.
+        values = ttk.Frame(panel)
+        values.grid(row=0, column=0, sticky="ew")
+        self._review_values = values
+        for column, (variable, _key) in enumerate(REVIEW_SUMMARY_ROWS):
+            ttk.Label(values, textvariable=self._var(variable)).grid(
+                row=0, column=column, sticky="w", padx=(0, 14)
+            )
+
+        # One row: the button that opens each value's own window.
+        buttons = ttk.Frame(panel)
+        buttons.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self._review_buttons_frame = buttons
+        self._review_buttons = {}
+        for column, (key, label) in enumerate(REVIEW_SUMMARY_BUTTONS):
+            button = ttk.Button(
+                buttons,
+                text=label,
+                command=lambda pressed=key: self._on_action(pressed),
+            )
+            button.grid(row=0, column=column, sticky="w", padx=(0, 6))
+            self._review_buttons[key] = button
+            # The application keeps every button's enabled state in sync through
+            # one map, so a popup button is driven exactly like any other.
+            self.buttons.setdefault(key, button)
+
+        self._review_empty = ttk.Label(
+            panel,
+            text=(
+                "No architecture review has been run yet - the advisors above "
+                "show which providers are configured."
+            ),
+            wraplength=900,
+            justify="left",
+        )
+        self._review_empty.grid(row=0, column=0, sticky="w")
 
     def question_value(self) -> str:
         """The question exactly as the operator typed it (never rewritten)."""
@@ -1726,16 +1632,10 @@ class MainWindow:
             "main": self._main_split,
             "review": self._review_split,
             "review_advisors": self._panes_frame,
-            "review_results": self._review_results_split,
-            "review_bottom": self._review_bottom_split,
             "supervisor": self._supervisor_split,
             "proposal": self._proposal_split,
             "deliberation": self._deliberation_split,
         }
-        for key, split in zip(
-            ("review_merged", "review_judge"), self._review_section_splits
-        ):
-            self._splits[key] = split
 
     def _restore_saved_tab(self) -> None:
         """Open the tab that was open when the layout was saved, if it exists."""
@@ -2081,30 +1981,18 @@ class MainWindow:
         self._sync_panes(panels)
         self._fill_pane_settings(review.get("provider_settings") or {})
         self._refresh_pane_summaries(panels)
-        self._fill(
-            self._merged,
-            tuple(review.get("merged_rows") or ()),
-            tuple(key for key, _heading, _width in FACT_COLUMNS),
-        )
-        # The conflicts, the judge and the cost are summaries here: one line each,
-        # with their detail one button away, so a tab with nothing to report shows
-        # nothing but the honest count.
-        self._var("review_conflicts_summary").set(
-            str(review.get("conflicts_summary") or "Conflicts: 0")
-        )
-        self._var("review_judge_summary").set(
-            str(review.get("judge_summary") or "Judge not used")
-        )
-        self._show_if(
-            self._conflicts_button, bool(review.get("conflicts_available"))
-        )
-        self._show_if(self._judge_button, bool(review.get("judge_used")))
-        self._set_text(
-            self._decision, tuple(review.get("decision_lines") or ())
-        )
-        self._var("review_total_cost").set(
-            f"Total cost: {review.get('total_cost', '-')}"
-        )
+        # The lower half of the tab is one compact panel: five short values and
+        # five buttons, and nothing else. The merged evidence, the conflicts, the
+        # judge, the decision and the cost are each one window away, so the tab
+        # itself renders no table and no text panel for them - and a review that
+        # has not been run yet is one honest empty state instead of five empty
+        # sections.
+        available = bool(review.get("available"))
+        for variable, key in REVIEW_SUMMARY_ROWS:
+            self._var(variable).set(str(review.get(key) or "-"))
+        self._show_if(self._review_values, available)
+        self._show_if(self._review_buttons_frame, available)
+        self._show_if(self._review_empty, not available)
 
         question = str(review.get("question", ""))
         # Never fight the operator: only prefill when the field is not focused.
@@ -2228,22 +2116,14 @@ class MainWindow:
             values = tuple(row)[: len(keys)] if row else ()
             table.insert("", "end", values=values)
 
-    def _set_text(self, widget: Any, lines: tuple[str, ...]) -> None:
-        """Rewrite one read-only text pane."""
-        widget.configure(state="normal")
-        widget.delete("1.0", "end")
-        if lines:
-            widget.insert("1.0", "\n".join(lines))
-            widget.see("1.0")
-        widget.configure(state="disabled")
-
     def _show_if(self, widget: Any, visible: bool) -> None:
         """Show or hide a widget without ever forgetting where it belongs.
 
-        ``grid_remove`` keeps the place the widget was given, so a button that
-        comes back - a judge consulted on a later review - returns exactly where
-        the operator last saw it. A hidden button is the honest empty state: an
-        absent judge and an empty conflict list take no room at all.
+        ``grid_remove`` keeps the place the widget was given, so the compact
+        summary and its buttons come back exactly where the operator last saw
+        them. A hidden widget is the honest empty state: before the first review
+        the five values and the five buttons take no room at all, and one small
+        line says why.
         """
         if widget is None:
             return

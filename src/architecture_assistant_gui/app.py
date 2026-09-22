@@ -31,6 +31,7 @@ from typing import Any, Mapping, Optional, Sequence
 from architecture_assistant.composition import (
     DEFAULT_REVIEW_QUESTION,
     CompositionConfig,
+    sanitize_text,
 )
 from architecture_assistant.domain.enums import Mode
 
@@ -49,12 +50,23 @@ from .layout import (
     parse_geometry,
     save_layout,
 )
-from .windows import open_popup
+from .windows import (
+    POPUP_ACTION_DETAILS,
+    POPUP_SIZE_SMALL,
+    POPUP_SIZES,
+    confirm_dialog,
+    open_popup,
+)
 
 __all__ = [
+    "CONFIRM_LABELS",
     "LAYOUT_PATH",
+    "PLAN_CANCEL_INTENT",
     "POLL_INTERVAL_MS",
     "PLAN_FILE_TYPES",
+    "POPUP_ERROR_WINDOW",
+    "POPUP_NOTICE_WINDOW",
+    "POPUP_PLAN_WINDOW",
     "SETTINGS_PATH",
     "SUPERVISOR_TICK_MS",
     "GuiApp",
@@ -64,6 +76,7 @@ __all__ = [
     "parse_args",
     "save_actor",
 ]
+
 
 #: How often the UI drains finished core results (queue polling only).
 POLL_INTERVAL_MS = 100
@@ -91,6 +104,48 @@ SETTINGS_PATH: Path = Path.home() / ".architecture_assistant_gui.json"
 #: operator name can never overwrite each other. Nothing about the layout is
 #: ever written to the database - see :mod:`architecture_assistant_gui.layout`.
 LAYOUT_PATH: Path = DEFAULT_LAYOUT_PATH
+
+#: The stable window keys of the popups the application itself opens (the
+#: spec-driven windows carry their own key in the spec). They are what the layout
+#: preference stores, and what makes each of these windows a singleton.
+POPUP_ERROR_WINDOW = "popup.error"
+POPUP_NOTICE_WINDOW = "popup.notice"
+POPUP_PLAN_WINDOW = "popup.plan_preview"
+
+#: The action key of the plan preview's Cancel side. Unlike "import_plan" it is
+#: deliberately *not* a core intent: cancelling writes nothing and reaches
+#: nothing, so it is handled by the panel alone.
+PLAN_CANCEL_INTENT = "cancel_plan"
+
+#: The window titles of a failed action. One readable title, no exception name.
+ERROR_TITLE = "Action Failed"
+ERROR_TITLE_CRITICAL = "Critical Failure"
+
+#: How much of a failure message the window shows before it belongs in Details.
+ERROR_MESSAGE_LIMIT = 1200
+
+#: The verb on a confirmation's confirm button, by action.
+#:
+#: A confirmation always reads ``[ Cancel ] [ <verb> ]`` with the verb naming
+#: what will actually happen - never an anonymous "Yes", and never a different
+#: button order in a different window. Anything not listed confirms with
+#: "Confirm".
+CONFIRM_LABELS: dict[str, str] = {
+    "approve": "Approve",
+    "approve_proposal": "Approve",
+    "approve_and_send": "Approve and Send",
+    "reject": "Reject",
+    "reject_proposal": "Reject",
+    "reject_directive": "Reject",
+    "unblock": "Unblock",
+    "resolve": "Resolve",
+    "abort": "Abort",
+    "run_review": "Run Review",
+    "deliberation_round1": "Run Round 1",
+    "deliberation_cancel": "Cancel Deliberation",
+    "synthesize_proposal": "Generate Proposal",
+    "deliberation_proposal": "Generate Proposal",
+}
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -231,6 +286,44 @@ def _window_exists(window: Any) -> bool:
         return False
 
 
+def _raise_window(window: Any) -> None:
+    """Bring an already-open window to the front and focus it (never fatal).
+
+    This is the whole duplicate rule: a second click on a button whose window is
+    already open *shows* that window instead of opening a copy of it, so a utility
+    window can never be opened twice by accident.
+    """
+    if not _window_exists(window):
+        return
+    try:
+        window.deiconify()
+        window.lift()
+        window.focus_set()
+    except BaseException:  # noqa: BLE001 - a closed window is not an error
+        pass
+
+
+def _text_section(
+    title: str, lines: Sequence[str], *, empty: str = ""
+) -> dict[str, Any]:
+    """One text section in the popup contract's own shape.
+
+    The contract a spec (and therefore every window) is built from: a title, no
+    columns and no rows, and the lines to render - the same shape the controller
+    builds for the windows it owns.
+    """
+    cleaned = [str(line) for line in lines]
+    if not any(line.strip() for line in cleaned):
+        cleaned = []
+    return {
+        "title": str(title),
+        "columns": [],
+        "rows": [],
+        "lines": cleaned,
+        "empty": str(empty or "Nothing to show."),
+    }
+
+
 def _save_succeeded(result: Any) -> bool:
     """Whether one finished job was a provider-settings save that landed.
 
@@ -291,14 +384,19 @@ class GuiApp:
         )
         #: The layout that was loaded on startup; empty means "use the defaults".
         self._layout: dict[str, Any] = {}
-        #: The popup windows that are open right now, by title. A second click on
-        #: a button whose window is already open raises that window instead of
-        #: opening a duplicate.
+        #: The popup windows that are open right now, by *stable window key*. A
+        #: second click on a button whose window is already open raises that
+        #: window instead of opening a duplicate - and the key never changes when
+        #: a title is reworded.
         self._popups: dict[str, Any] = {}
         #: The geometry of the popups that have been closed in this session. The
         #: live geometry of the open ones is read from the windows themselves when
         #: the layout is written, so both halves end up in the same preference.
         self._popup_geometry: dict[str, str] = {}
+        #: The newest failed action, as the plain data its window renders. It is
+        #: kept so ``Details...`` can reveal the same failure again without the
+        #: panel asking the core for anything.
+        self._failure: dict[str, Any] = {}
         #: When the next supervision tick is due (monotonic seconds). The runtime
         #: owns no thread, so the panel is its clock; nothing is submitted until
         #: supervision is configured.
@@ -381,10 +479,11 @@ class GuiApp:
             snapshot = dict(self._window.layout_snapshot())
         except BaseException:  # noqa: BLE001 - a preference never blocks a close
             return
-        # The popup windows are remembered by *title*, next to the main window's
-        # own geometry: a popup that is still open contributes where it is now, a
-        # popup that was closed earlier contributes where it was left. Neither is
-        # domain state - it is a preference, and `save_layout` validates it.
+        # The popup windows are remembered by their *stable key*, next to the main
+        # window's own geometry: a popup that is still open contributes where it is
+        # now, a popup that was closed earlier contributes where it was left.
+        # Neither is domain state - it is a preference, and `save_layout` validates
+        # it.
         windows = {**self._popup_geometry, **self._open_popup_geometry()}
         if windows:
             snapshot["windows"] = windows
@@ -393,11 +492,11 @@ class GuiApp:
     def _open_popup_geometry(self) -> dict[str, str]:
         """The live geometry of every popup that is still on screen."""
         geometry: dict[str, str] = {}
-        for title, window in self._popups.items():
+        for window_key, window in self._popups.items():
             if not _window_exists(window):
                 continue
             try:
-                geometry[title] = str(window.winfo_geometry())
+                geometry[window_key] = str(window.winfo_geometry())
             except BaseException:  # noqa: BLE001 - a preference, never a failure
                 continue
         return geometry
@@ -479,8 +578,6 @@ class GuiApp:
 
     def _on_action(self, key: str) -> None:
         """Handle one button press; every dialog happens here, never in a view."""
-        from tkinter import messagebox
-
         try:
             intent = self._controller.intent(key)
         except ValueError as error:
@@ -489,9 +586,9 @@ class GuiApp:
             return
 
         if key == "view_snapshot":
-            self._show_text(
-                "Monitor snapshot", self._controller.snapshot_json()
-            )
+            # The snapshot is a window like every other one: the controller builds
+            # its spec and this is the only place that opens it.
+            self._open_popup(key)
             return
         if key == CLEAR_LOGS_INTENT:
             # Empties the *view*: the runtime buffer holds nothing that was not
@@ -545,15 +642,30 @@ class GuiApp:
                 return
             reason = typed
 
-        if intent.confirmation and not messagebox.askyesno(
-            "Confirm", intent.confirmation, parent=self._root
-        ):
+        if intent.confirmation and not self._confirm(intent):
             self._controller.log(f"{intent.label} cancelled.")
             self._render()
             return
 
         self._controller.submit(key, reason=reason)
         self._render()
+
+    def _confirm(self, intent: Any) -> bool:
+        """Ask the one modal question this action needs; ``False`` means "no".
+
+        A confirmation is reserved for a decision with a consequence - a provider
+        cost, a terminal state, an approval - and the button names that
+        consequence instead of saying "Yes". Everything read-only happens without
+        a dialog at all.
+        """
+        if self._root is None:
+            return True
+        return confirm_dialog(
+            self._root,
+            title=intent.label,
+            message=str(intent.confirmation),
+            confirm_label=CONFIRM_LABELS.get(str(intent.key), "Confirm"),
+        )
 
     def _open_popup(self, key: str) -> None:
         """Open the window one display action stands for, from the last payload.
@@ -562,7 +674,8 @@ class GuiApp:
         controller, the geometry from the same layout preference file as the main
         window, and the window itself from :mod:`architecture_assistant_gui.windows`.
         A button whose window is already open raises that window instead of
-        opening a second one.
+        opening a second copy of it, and Refresh re-reads the spec, so an open
+        window can never show data the main window has moved past.
         """
         if self._root is None:
             return
@@ -573,52 +686,137 @@ class GuiApp:
             self._controller.log(f"{key}: nothing to show in a window yet.")
             self._render()
             return
-        title = str(spec.get("title") or "Details")
-        existing = self._popups.get(title)
+        self._popup_window(
+            self._window_key(spec, key),
+            spec,
+            size=self._spec_size(spec),
+            on_refresh=lambda _window, name=key: self._refresh_popup(name),
+        )
+
+    def _window_key(self, spec: Mapping[str, Any], key: str) -> str:
+        """The stable identity of a spec's window: its own key, else its action."""
+        return str(spec.get("window") or f"popup.{key}")
+
+    @staticmethod
+    def _spec_size(spec: Mapping[str, Any]) -> str:
+        """A spec's size category, or the default one when it names an unknown."""
+        size = str(spec.get("size") or "")
+        return size if size in POPUP_SIZES else "medium"
+
+    def _popup_window(
+        self,
+        window_key: str,
+        spec: Optional[Mapping[str, Any]],
+        *,
+        size: str = "medium",
+        modal: bool = False,
+        include_copy: bool = True,
+        refresh_existing: bool = False,
+        on_action: Any = None,
+        on_refresh: Any = None,
+    ) -> Any:
+        """Open - or bring back - the one window this key stands for.
+
+        One window per stable key: a second click focuses the window that is
+        already open. Entity-specific details keep a key each (every advisor's
+        result is its own window), so "one window per key" never hides something
+        the operator asked for - it only stops the same window from piling up.
+        The remembered geometry is handed to the window as plain numbers; the
+        window clamps it, so a stale position cannot hide it.
+        """
+        if self._root is None:
+            return None
+        existing = self._popups.get(window_key)
         if _window_exists(existing):
-            existing.deiconify()
-            existing.lift()
-            existing.focus_set()
-            return
+            if refresh_existing and spec is not None:
+                try:
+                    existing.render(spec)
+                except BaseException:  # noqa: BLE001 - a stale window is not fatal
+                    pass
+            _raise_window(existing)
+            return existing
+        placement = self._saved_popup_placement(window_key)
         window = open_popup(
             self._root,
-            spec,
-            geometry=self._saved_popup_geometry(title),
-            on_close=lambda open_window, name=title: self._remember_popup(
+            spec or {},
+            size=size,
+            width=placement[0] if placement else None,
+            height=placement[1] if placement else None,
+            x=placement[2] if placement else None,
+            y=placement[3] if placement else None,
+            modal=modal,
+            include_copy=include_copy,
+            on_close=lambda open_window, name=window_key: self._remember_popup(
                 name, open_window
             ),
-            on_action=self._on_action,
+            on_action=on_action if on_action is not None else self._on_popup_action,
+            on_refresh=on_refresh,
         )
-        self._popups[title] = window
+        self._popups[window_key] = window
+        return window
 
-    def _saved_popup_geometry(self, title: str) -> str:
-        """The remembered geometry of one popup, or ``""`` for the default.
+    def _on_popup_action(self, key: str) -> None:
+        """Route one popup button: the panel's own actions first, then intents.
+
+        Copy, Refresh and Close never arrive here - the window itself owns those -
+        so this is only a spec's own extra buttons: a Details view, an export, the
+        plan preview's two sides.
+        """
+        if key == POPUP_ACTION_DETAILS:
+            self._show_error_window(reveal=True)
+            return
+        if key == PLAN_CANCEL_INTENT:
+            self._cancel_plan()
+            return
+        self._on_action(key)
+
+    def _refresh_popup(self, key: str) -> None:
+        """Re-read one window's spec from the last payload - nothing is queued."""
+        spec = self._controller.popup_view(key)
+        if not spec:
+            return
+        window = self._popups.get(self._window_key(spec, key))
+        if not _window_exists(window):
+            return
+        try:
+            window.render(spec)
+        except BaseException:  # noqa: BLE001 - a preference never breaks a window
+            pass
+
+    def _saved_popup_placement(
+        self, window_key: str
+    ) -> Optional[tuple[int, int, Optional[int], Optional[int]]]:
+        """The remembered size and position of one window, or ``None``.
 
         The value is re-validated here - it came from a file the operator can
-        edit - so a damaged preference costs a popup its position, never its
-        usability.
+        edit, and it has the same ``WxH[+X+Y]`` shape the main window uses - so a
+        damaged preference costs a window its position, never its usability. The
+        window itself clamps a position that is off this screen, and centres
+        itself when there is none at all.
         """
         windows = self._layout.get("windows")
         if not isinstance(windows, Mapping):
-            return ""
-        parsed = parse_geometry(windows.get(title))
-        if parsed is None:
-            return ""
-        return str(windows.get(title) or "")
+            return None
+        return parse_geometry(windows.get(window_key))
 
-    def _remember_popup(self, title: str, window: Any) -> None:
+    def _remember_popup(self, window_key: str, window: Any) -> None:
         """Keep one popup's geometry *before* it is destroyed (never fatal)."""
         try:
             geometry = str(window.winfo_geometry())
         except BaseException:  # noqa: BLE001 - a preference never blocks a close
             return
         if geometry:
-            self._popup_geometry[title] = geometry
-        self._popups.pop(title, None)
+            self._popup_geometry[window_key] = geometry
+        self._popups.pop(window_key, None)
 
     def _ask_reason(self, intent: Any) -> Optional[str]:
-        """Ask for the reason; ``None`` means "cancelled, send nothing"."""
-        from tkinter import messagebox, simpledialog
+        """Ask for the reason; ``None`` means "cancelled, send nothing".
+
+        One modal prompt - the operator's answer *is* the input the core needs -
+        and, when it comes back empty, one small non-modal notice instead of a
+        second dialog stacked on top of the first.
+        """
+        from tkinter import simpledialog
 
         value = simpledialog.askstring(
             intent.label, intent.reason_prompt, parent=self._root
@@ -626,10 +824,9 @@ class GuiApp:
         if value is None:
             return None
         if not value.strip():
-            messagebox.showwarning(
-                "Reason required",
+            self._notice(
+                "Reason Required",
                 "A reason is required for this action; nothing was sent.",
-                parent=self._root,
             )
             return None
         return value.strip()
@@ -666,29 +863,97 @@ class GuiApp:
         self._controller.clear_log_view()
         self._render()
     def _report_error(self, result: Any) -> None:
-        """Show a failed action; a CRITICAL failure also latches the banner."""
-        from tkinter import messagebox
+        """Show the newest failed action in the panel's one error window.
 
+        The window states what happened in one readable, sanitized line; the
+        exception type and the rest of the message are behind ``Details...``. No
+        stack trace, header, key or raw provider body can reach either view: the
+        text goes through the same sanitizer the log contract uses, and nothing
+        else is taken from the failure at all. A CRITICAL failure also latches the
+        banner, exactly as before.
+        """
         error = result.error
-        title = "CRITICAL" if error.critical else "Action failed"
-        messagebox.showerror(
-            title,
-            f"{result.label}\n\n{error.error_name}\n{error.message}",
-            parent=self._root,
+        label = sanitize_text(result.label, limit=120)
+        error_name = sanitize_text(error.error_name, limit=120)
+        message = sanitize_text(error.message, limit=ERROR_MESSAGE_LIMIT)
+        critical = bool(error.critical)
+        self._failure = {
+            "title": ERROR_TITLE_CRITICAL if critical else ERROR_TITLE,
+            "message": message or error_name or "The action failed.",
+            "critical": critical,
+            "details": [
+                f"Action: {label}",
+                f"Error type: {error_name or 'Error'}",
+                f"Critical: {'yes' if critical else 'no'}",
+                "",
+                message or error_name or "The action failed.",
+            ],
+        }
+        self._show_error_window()
+
+    def _show_error_window(self, reveal: bool = False) -> None:
+        """Draw the panel's one error window from the newest failure.
+
+        One window, not one per failure: a repeated failure replaces the report
+        that is on screen - the persistent record of every event is the log - so a
+        bursting loop cannot flood the desktop with windows.
+        """
+        failure = self._failure
+        if self._root is None or not failure:
+            return
+        actions: list[dict[str, Any]] = []
+        sections: list[dict[str, Any]] = []
+        if reveal:
+            sections.append(
+                _text_section(
+                    "Details",
+                    list(failure["details"]),
+                    empty="No detail was reported.",
+                )
+            )
+        else:
+            actions.append(
+                {
+                    "key": POPUP_ACTION_DETAILS,
+                    "label": "Details...",
+                    "role": "secondary",
+                }
+            )
+        spec: dict[str, Any] = {
+            "title": str(failure["title"]),
+            "note": str(failure["message"]),
+            "sections": sections,
+            "actions": actions,
+        }
+        self._popup_window(
+            POPUP_ERROR_WINDOW,
+            spec,
+            size=POPUP_SIZE_SMALL,
+            refresh_existing=True,
         )
 
-    def _show_text(self, title: str, text: str) -> None:
-        """A read-only window showing text."""
-        import tkinter as tk
-        from tkinter import scrolledtext
+    def _notice(self, title: str, message: str) -> None:
+        """A small non-modal notice: what happened, with no decision to make.
 
-        window = tk.Toplevel(self._root)
-        window.title(title)
-        window.geometry("900x620")
-        body = scrolledtext.ScrolledText(window, wrap="none")
-        body.pack(fill="both", expand=True)
-        body.insert("1.0", text)
-        body.configure(state="disabled")
+        Anything that needs a *decision* is a confirmation and is modal; a notice
+        never blocks the panel, so the operator can read it and keep working.
+        """
+        if self._root is None:
+            self._controller.log(f"{title}: {message}")
+            self._render()
+            return
+        spec: dict[str, Any] = {
+            "title": str(title),
+            "note": str(message),
+            "sections": [],
+        }
+        self._popup_window(
+            POPUP_NOTICE_WINDOW,
+            spec,
+            size=POPUP_SIZE_SMALL,
+            include_copy=False,
+            refresh_existing=True,
+        )
 
     def _open_folder(self) -> None:
         """Open the reports folder, or report its path when that is impossible."""
@@ -739,40 +1004,57 @@ class GuiApp:
         self._render()
 
     def _show_plan_preview(self) -> None:
-        """Offer the preview: Confirm Import imports, Cancel writes nothing."""
-        import tkinter as tk
-        from tkinter import scrolledtext, ttk
+        """Offer the preview: Confirm Import imports, Cancel writes nothing.
 
-        window = tk.Toplevel(self._root)
-        window.title("Plan preview")
-        window.geometry("780x560")
-        body = scrolledtext.ScrolledText(window, wrap="word", height=20)
-        body.pack(fill="both", expand=True, padx=8, pady=(8, 4))
-        body.insert("1.0", "\n".join(self._controller.plan_preview_lines()))
-        body.configure(state="disabled")
-
-        buttons = ttk.Frame(window, padding=(8, 4))
-        buttons.pack(fill="x")
-        confirm = ttk.Button(
-            buttons,
-            text="Confirm Import",
-            command=lambda: self._confirm_plan(window),
+        A **decision** window, and so the one popup that is modal: the operator's
+        answer decides whether the imported plan reaches the core, and nothing
+        else in the panel should be touched before it is given. Escape, the X and
+        ``[ Cancel ]`` all mean Cancel, so a closed window never imports anything.
+        """
+        importable = self._controller.plan_importable()
+        blocked = self._controller.plan_blocked_reason()
+        if importable:
+            note = "The loaded plan can be imported into the project."
+        elif blocked:
+            note = f"This plan cannot be imported: {blocked}"
+        else:
+            note = "This plan cannot be imported."
+        spec: dict[str, Any] = {
+            "title": "Plan Preview",
+            "note": note,
+            "sections": [
+                _text_section(
+                    "Preview",
+                    self._controller.plan_preview_lines(),
+                    empty="The preview is empty.",
+                )
+            ],
+            "actions": [
+                {
+                    "key": PLAN_CANCEL_INTENT,
+                    "label": "Cancel",
+                    "role": "cancel",
+                    "closes": True,
+                },
+                {
+                    "key": "import_plan",
+                    "label": "Confirm Import",
+                    "role": "primary",
+                    "closes": True,
+                    "enabled": importable,
+                },
+            ],
+        }
+        self._popup_window(
+            POPUP_PLAN_WINDOW,
+            spec,
+            size="large",
+            modal=True,
+            refresh_existing=True,
         )
-        confirm.grid(row=0, column=0, padx=(0, 6))
-        if not self._controller.plan_importable():
-            confirm.state(["disabled"])
-        ttk.Button(
-            buttons, text="Cancel", command=lambda: self._cancel_plan(window)
-        ).grid(row=0, column=1)
 
-    def _confirm_plan(self, window: Any) -> None:
-        """Import the loaded plan - the reason is asked by the action handler."""
-        window.destroy()
-        self._on_action("import_plan")
-
-    def _cancel_plan(self, window: Any) -> None:
+    def _cancel_plan(self) -> None:
         """Forget the pending plan: nothing was sent to the core at all."""
-        window.destroy()
         self._controller.clear_plan()
         self._controller.log("Plan import cancelled; nothing was written.")
         self._render()

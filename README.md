@@ -116,21 +116,49 @@ covered by tests.
   status, severity, relation, short finding summary); the full result - finding
   id, confidence, anchor, step, evidence references, tokens, cost, the sanitized
   provider error and the whole finding text - is one `Details...` click away. The
-  shared results stay below them: merged evidence, the conflict count, the judge
-  line, the advisory decision and the total cost.
+  shared results are **one compact summary line** under them: the evidence count,
+  the conflict count, the judge, the decision status and the cost, each with a
+  button that opens the window holding the full information.
 - **A popup for everything that is consulted, not worked in** - the main window
   keeps four tabs (**Monitor**, **Architecture Review**, **Architecture
   Proposal**, **Supervisor**) and one compact utility bar, and Logs, Audit, Risks,
   Reports, cost detail, the judge, the evidence conflicts, every advisor's
-  technical result, the supervisor's technical details, the project details and
-  the architecture details open in their own window. Each window is a
-  `Toplevel` that is **resizable, scrollable and non-modal** (only a confirmation
-  dialog is modal), renders one plain-data spec the controller built from the last
-  projection, and never calls a repository, a provider or the core. Nothing was
-  removed by taking the tabs away: the same rows, from the same payload, are in
-  the popups - and an unused judge or an empty conflict list now costs one line
-  instead of a blank table. Popup size and position are remembered in the same
-  local layout file as the window and the sash positions.
+  technical result, the supervisor's technical details, the project details, the
+  architecture details and the monitor snapshot open in their own window. Each
+  window is a `Toplevel` that is **resizable, scrollable and non-modal** (only a
+  confirmation dialog is modal), renders one plain-data spec the controller built
+  from the last projection, and never calls a repository, a provider or the core.
+  Nothing was removed by taking the tabs away: the same rows, from the same
+  payload, are in the popups - and an unused judge or an empty conflict list now
+  costs one line instead of a blank table.
+- **One dialog standard** - every window, from a confirmation to the audit trail,
+  is the same window: a **title**, an optional one-line **note**, a **content
+  area** of sections and one **action bar** at the bottom
+  (`[ Copy ] [ Refresh ] [ ... ] [ Close ]` for a view, `[ Cancel ] [ Confirm ]`
+  for a decision), with the same padding, spacing and button order everywhere.
+  Escape, the window's own X and `[ Close ]` all close it, Escape on a decision
+  window means *Cancel*, and the content scrolls (a long table in both
+  directions) instead of forcing a huge window. A window opens at one of three
+  size categories - **small** for a confirmation or a notice, **medium** for a
+  detail view, **large** for a long table (logs, audit, risks, a plan decision) -
+  and a window that carries nothing but a note is only as tall as its note until
+  it has content to show. It is centred on the main window when it has no
+  remembered position, clamped back onto the screen when a remembered position
+  would land off it, and it never steals the keyboard from a dialog that is
+  already waiting for an answer.
+- **Windows that remember where they were** - the size and position of every
+  popup are remembered in the same local layout file as the main window and the
+  sash positions, under a **stable key** per window (`popup.cost`, `popup.logs`,
+  `popup.audit`, `popup.risks`, `popup.project_details`,
+  `popup.architecture_details`, `popup.supervisor_details`,
+  `popup.advisor_details_1`, `popup.snapshot`, ...). The key never changes when a
+  title is reworded, so re-labelling a window cannot move it. Each of these
+  windows is opened **once**: a second click raises and focuses the window that is
+  already open instead of piling up a duplicate. `Refresh` re-reads the last
+  payload, `Copy` puts the window's own content (tables tab-separated) on the
+  clipboard, and a failure opens **one** error window - a readable message with
+  the technical detail behind `Details...`, sanitized by the same contract the log
+  uses, so no stack trace, header, key or provider body can reach it.
 
 - **Advisory supervision (Step 28)** - an *optional*, fail-closed analysis of one
   worker report before the authoritative review. It is **off by default**; with
@@ -481,18 +509,24 @@ The tab is laid out for comparison, in one window (never extra OS windows):
   (severity, confidence, relation, anchor, step, finding id, evidence refs),
   its **evidence references**, the sanitized **ABSTAIN/ERROR reason** and its
   **tokens and cost** - so all three answers can be read against each other;
-* **below them the shared results**: merged evidence, the validated conflicts,
-  the judge result, the advisory decision (marked *explains, never overrides*)
-  and the cost of the review, with the total in one bold line and one row per
-  advisor plus the judge.
+* **below them one compact summary line**, the whole lower half of the tab:
+  `Evidence: n`, `Conflicts: n`, `Judge: used (status)` / `Judge: not used`,
+  `Decision: status` and `Cost: amount` / `Cost: unavailable (reason)`, with one
+  button under each value - **Evidence**, **Conflicts**, **Judge**, **Decision**,
+  **Cost** - that opens the window with the full information (the merged-evidence
+  table, the validated conflicts, the judge output, the advisory decision marked
+  *explains, never overrides*, and the per-advisor cost). Nothing of that is
+  rendered into the tab itself, so an unused judge, an empty conflict list or a
+  missing review costs one line instead of five sections - and before the first
+  review the panel is a single small empty state, never a set of empty tables.
 
 Every region is a **draggable pane** rather than a fixed layout: the split
 between the work area and the tab notebook, the split inside the review tab
-between the question/header, the advisor panes and the shared results, the split
-between the three advisor panes themselves (so one advisor can be widened
-without touching the other two), the split between merged evidence/conflicts and
-the judge/advisory decision, the one between the results and the cost, the one
-between the proposal summary and the proposal detail, and the three panes of the
+between the question/header and the advisor area - the summary panel sits at the
+bottom of that same pane, so there is **no second splitter under the advisors**
+and they keep the height - the split between the three advisor panes themselves
+(so one advisor can be widened without touching the other two), the one between
+the proposal summary and the proposal detail, and the three panes of the
 Supervisor tab. Each splitter starts at a sensible position - the three advisors
 and the three supervisor panes each get a third, the notebook keeps most of the
 window height - and each pane has a floor, so a drag can never collapse a region
@@ -688,13 +722,13 @@ self-check has to be re-run to confirm compliance on the current tree.
 
 Current tree, after the operator panel (v1.1), the plan loader, the advisory
 architecture review, the operator log, the side-by-side advisor layout, the
-managed-project architecture proposal and the advisory supervision of a worker
-report:
+managed-project architecture proposal, the advisory supervision of a worker
+report and the dialog/window cleanup:
 
-- **3385 passed / 0 failed** (`python -m pytest -q`; one display-dependent test
-  skips instead on a machine where Tk cannot open a window)
+- **3524 passed / 0 failed** (`python -m pytest -q`; one display-dependent test
+  skips when Tk cannot give a window a real geometry)
 - architecture self-check: baseline **1.1**, compliant **True**, **0**
-  violations, **69** modules, **3** architecture rules
+  violations, **71** modules, **3** architecture rules
 
 The plan loader, the architecture review, the log-event contract, the
 managed-project proposal pair (`architecture_synthesis.py` and

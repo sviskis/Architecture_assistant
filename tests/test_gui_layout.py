@@ -10,9 +10,9 @@ display is missing) and pin:
   notebook owning most of the height;
 * three *separate* advisor panes inside one horizontal splitter in the
   Architecture Review tab, starting equally wide;
-* a draggable split between the review question/header, the advisor panes and
-  the shared results - and, inside the results, merged evidence over conflicts,
-  the judge over the advisory decision, with the cost below;
+* a draggable split between the review question/header and the advisor area, and
+  **no** splitter below the advisors: the shared results are one compact summary
+  panel at the bottom of that same pane, so the advisors keep the height;
 * three draggable panes in the Supervisor tab;
 * a draggable split between the proposal summary and the proposal detail;
 * a drag that would collapse a pane being stopped at the pane floor, and a
@@ -108,6 +108,18 @@ def _parents(widget: Any) -> list[str]:
 def _inside(widget: Any, pane: Any) -> bool:
     """Whether ``widget`` lives inside the pane widget ``pane``."""
     return str(pane) in _parents(widget)
+
+
+def _of_kind(widget: Any, kind: type) -> list[Any]:
+    """Every widget of one kind below ``widget`` (inclusive of its own children)."""
+    found: list[Any] = []
+    stack = list(widget.winfo_children())
+    while stack:
+        child = stack.pop()
+        if isinstance(child, kind):
+            found.append(child)
+        stack.extend(child.winfo_children())
+    return found
 
 
 def _drag(root: tk.Misc, split: Any, index: int, position: int) -> None:
@@ -270,9 +282,9 @@ class TestMainWindowSplit:
 
 
 class TestReviewTabSplitters:
-    """The Architecture Review tab is a tree of draggable splitters."""
+    """The Architecture Review tab is a splitter over the advisors and a summary."""
 
-    def test_the_review_tab_has_a_vertical_splitter_with_three_regions(
+    def test_the_review_tab_has_a_vertical_splitter_with_two_regions(
         self, window: tuple[tk.Tk, views.MainWindow]
     ) -> None:
         root, view = window
@@ -280,16 +292,16 @@ class TestReviewTabSplitters:
 
         assert isinstance(split, ttk.PanedWindow)
         assert str(split.cget("orient")) == "vertical"
-        assert len(split.panes()) == 3
-        summary, advisors, results = _panes(root, split)
+        # two regions, not three: the shared results are one compact panel inside
+        # the lower one, so there is no second, lower splitter left to drag
+        assert len(split.panes()) == 2
+        summary, advisors = _panes(root, split)
 
-        # question and header on top, the three advisors in the middle, the
-        # shared results below
+        # question and header on top, the advisors *and* the review summary below
         assert _inside(view._question, summary)
         assert _inside(view._review_header, summary)
         assert _inside(view._panes_frame, advisors)
-        assert _inside(view._review_results_split, results)
-        assert _inside(view._cost, results)
+        assert _inside(view._review_summary, advisors)
 
     def test_the_three_advisor_panes_are_separate_panes_of_one_splitter(
         self, window: tuple[tk.Tk, views.MainWindow]
@@ -377,83 +389,43 @@ class TestReviewTabSplitters:
         assert all(widget.winfo_exists() == 0 for widget in replaced)
 
 
-    def test_the_review_results_split_left_and_right_are_draggable(
+    def test_the_review_summary_is_a_panel_not_a_splitter(
         self, window: tuple[tk.Tk, views.MainWindow]
     ) -> None:
+        """What replaced the five permanent sections: one frame, two short rows."""
         root, view = window
-        split = view._review_results_split
-
-        assert isinstance(split, ttk.PanedWindow)
-        assert str(split.cget("orient")) == "horizontal"
-        assert len(split.panes()) == 2
-        left, right = _panes(root, split)
-
-        # merged evidence over conflicts on the left, the judge over the
-        # advisory decision on the right
-        assert _inside(view._merged, left)
-        assert _inside(view._review_conflicts, left)
-        assert _inside(view._judge, right)
-        assert _inside(view._decision, right)
-
-        before = _sizes(root, split)
-        _drag(root, split, 0, before[0] + 120)
-        after = _sizes(root, split)
-
-        assert after[0] > before[0]
-        assert after[1] < before[1]
-
-    def test_the_review_results_hold_two_vertical_splitters(
-        self, window: tuple[tk.Tk, views.MainWindow]
-    ) -> None:
-        root, view = window
-        # give the results some room first: the tab is a splitter tree, so the
-        # inner sashes only matter once the region has a height
         root.geometry("1400x1150")
         _settle(root)
-        left, right = view._review_section_splits
+        panel = view._review_summary
 
-        assert str(left.cget("orient")) == "vertical"
-        assert str(right.cget("orient")) == "vertical"
-        assert len(left.panes()) == 2
-        assert len(right.panes()) == 2
+        assert isinstance(panel, ttk.LabelFrame)
+        assert _inside(panel, view._panes_frame) is False
+        # the values and their five buttons are the panel's whole content
+        assert _inside(view._review_values, panel)
+        assert _inside(view._review_buttons_frame, panel)
+        for key, _label in views.REVIEW_SUMMARY_BUTTONS:
+            assert _inside(view._review_buttons[key], panel)
+            assert _inside(view._review_buttons[key], view._review_buttons_frame)
+        # and nothing in it is a splitter or a table any more
+        assert _of_kind(panel, ttk.PanedWindow) == []
+        assert _of_kind(panel, ttk.Treeview) == []
 
-        merged_pane, conflicts_pane = _panes(root, left)
-        judge_pane, decision_pane = _panes(root, right)
-
-        assert _inside(view._merged, merged_pane)
-        assert _inside(view._review_conflicts, conflicts_pane)
-        assert _inside(view._judge, judge_pane)
-        assert _inside(view._decision, decision_pane)
-
-        before = _sizes(root, left)
-        _drag(root, left, 0, before[0] + 40)
-        after = _sizes(root, left)
-
-        assert after[0] > before[0]
-        assert after[1] < before[1]
-
-    def test_the_cost_area_is_the_lower_pane_of_the_bottom_splitter(
+    def test_the_advisor_area_owns_the_height_of_the_tab(
         self, window: tuple[tk.Tk, views.MainWindow]
     ) -> None:
+        """Removing the lower splitter gave the advisor panes their room back."""
         root, view = window
-        split = view._review_bottom_split
+        root.geometry("1400x1150")
+        _settle(root)
 
-        assert isinstance(split, ttk.PanedWindow)
-        assert str(split.cget("orient")) == "vertical"
-        results, cost = _panes(root, split)
+        advisors = view._panes_frame.winfo_height()
+        summary = view._review_summary.winfo_height()
 
-        # the upper pane *is* the results splitter, the lower one is the cost
-        assert str(view._review_results_split) == str(results)
-        assert _inside(view._merged, results)
-        assert _inside(view._cost, cost)
-
-        # the cost pane can be given its own height
-        before = _sizes(root, split)
-        _drag(root, split, 0, before[0] - 30)
-        after = _sizes(root, split)
-
-        assert after[0] < before[0]
-        assert after[1] > before[1]
+        assert advisors > 0
+        assert summary > 0
+        # the compact panel is two short rows: the advisors get everything else
+        assert advisors > summary * 3
+        assert advisors > view._review_header.winfo_height()
 
     def test_dragging_the_review_sash_resizes_the_regions(
         self, window: tuple[tk.Tk, views.MainWindow]
@@ -962,12 +934,14 @@ class TestTheLayoutVocabulary:
         assert named["main"] is view._main_split
         assert named["review"] is view._review_split
         assert named["review_advisors"] is view._panes_frame
-        assert named["review_results"] is view._review_results_split
-        assert named["review_bottom"] is view._review_bottom_split
-        assert named["review_merged"] is view._review_section_splits[0]
-        assert named["review_judge"] is view._review_section_splits[1]
         assert named["supervisor"] is view._supervisor_split
         assert named["proposal"] is view._proposal_split
+        # the review results are a panel inside the advisor pane now, so they
+        # have no splitter name of their own any more
+        assert "review_results" not in named
+        assert "review_bottom" not in named
+        assert "review_merged" not in named
+        assert "review_judge" not in named
 
 
 class TestTheApplicationRemembersTheWindow:

@@ -52,6 +52,8 @@ __all__ = [
     "POPUP_AUDIT",
     "POPUP_CONFLICTS",
     "POPUP_COST",
+    "POPUP_DECISION",
+    "POPUP_EVIDENCE",
     "POPUP_INTENTS",
     "POPUP_INTENT_GROUP",
     "POPUP_LOGS",
@@ -60,7 +62,10 @@ __all__ = [
     "POPUP_RISKS",
     "POPUP_ARCHITECTURE",
     "POPUP_JUDGE",
+    "POPUP_SNAPSHOT_INTENT",
     "POPUP_SUPERVISOR",
+    "POPUP_WINDOW_KEYS",
+    "POPUP_WINDOW_SIZES",
     "PROVIDER_INTENT_GROUP",
     "PROVIDER_SETTINGS_INTENTS",
     "RESOLVE_STATES",
@@ -200,6 +205,11 @@ POPUP_ARCHITECTURE = "architecture_details"
 POPUP_SUPERVISOR = "supervisor_technical"
 POPUP_JUDGE = "review_judge_details"
 POPUP_CONFLICTS = "review_conflict_details"
+#: The two review results that used to be rendered into the tab itself: the
+#: merged evidence (a table) and the advisory decision (a text panel). They are
+#: windows of their own now, opened from the tab's compact summary line.
+POPUP_EVIDENCE = "review_evidence_details"
+POPUP_DECISION = "review_decision_details"
 
 #: One advisor-detail popup per pane, in pane order: a pane is the only thing
 #: that knows which advisor slot it shows.
@@ -222,12 +232,59 @@ POPUP_INTENTS: frozenset[str] = frozenset(
         POPUP_SUPERVISOR,
         POPUP_JUDGE,
         POPUP_CONFLICTS,
+        POPUP_EVIDENCE,
+        POPUP_DECISION,
         *POPUP_ADVISOR_KEYS,
     }
 )
 
 #: The one action the logs area offers: it empties the *view* only.
 CLEAR_LOGS_INTENT = "clear_logs"
+
+#: The stable identity of every popup window, by the action that opens it.
+#:
+#: A window is remembered and de-duplicated by *this* key, never by its title:
+#: the title is a label the operator reads and may be reworded ("Supervisor -
+#: technical details" became "Supervisor Details"), and re-wording a label must
+#: never move a window or open a second copy of it. The keys are the ones the
+#: layout preference file stores, so they are also the keys an operator sees in
+#: ``data/gui_layout.json``.
+POPUP_WINDOW_KEYS: dict[str, str] = {
+    POPUP_COST: "popup.cost",
+    POPUP_LOGS: "popup.logs",
+    POPUP_AUDIT: "popup.audit",
+    POPUP_RISKS: "popup.risks",
+    POPUP_REPORTS: "popup.reports",
+    POPUP_PROJECT: "popup.project_details",
+    POPUP_ARCHITECTURE: "popup.architecture_details",
+    POPUP_SUPERVISOR: "popup.supervisor_details",
+    POPUP_JUDGE: "popup.judge_details",
+    POPUP_CONFLICTS: "popup.conflicts",
+    POPUP_EVIDENCE: "popup.evidence_details",
+    POPUP_DECISION: "popup.decision_details",
+    "view_snapshot": "popup.snapshot",
+    **{
+        key: f"popup.advisor_details_{index + 1}"
+        for index, key in enumerate(POPUP_ADVISOR_KEYS)
+    },
+}
+
+#: The size category of every window, by the action that opens it: the
+#: categories themselves (and their pixel sizes) live in
+#: :mod:`architecture_assistant_gui.windows`. ``medium`` is the default, so only
+#: the windows that need to differ from it are listed.
+POPUP_WINDOW_SIZES: dict[str, str] = {
+    POPUP_COST: "large",
+    POPUP_LOGS: "large",
+    POPUP_AUDIT: "large",
+    POPUP_RISKS: "large",
+    POPUP_SUPERVISOR: "large",
+    POPUP_EVIDENCE: "large",
+    "view_snapshot": "large",
+}
+
+#: The popup action that shows the last monitor projection as pretty-printed JSON.
+POPUP_SNAPSHOT_INTENT = "view_snapshot"
 
 #: The group of the popup windows' own buttons. Deliberately not one of the
 #: panel's ``GROUPS``: a popup button lives in the popup or in the compact
@@ -311,6 +368,14 @@ POPUP_PROVIDER_COLUMNS: tuple[tuple[str, str, int], ...] = (
     ("relation", "Relation", 140),
     ("anchor", "Anchor", 180),
     ("cost", "Cost", 340),
+)
+POPUP_EVIDENCE_COLUMNS: tuple[tuple[str, str, int], ...] = (
+    ("source", "Advisor", 120),
+    ("status", "Status", 130),
+    ("severity", "Severity", 100),
+    ("relation", "Relation", 150),
+    ("anchor", "Anchor", 220),
+    ("references", "Evidence references", 380),
 )
 
 
@@ -485,6 +550,18 @@ INTENTS: tuple[Intent, ...] = (
     Intent(
         key=POPUP_CONFLICTS,
         label="View Conflicts",
+        group=POPUP_INTENT_GROUP,
+        mutating=False,
+    ),
+    Intent(
+        key=POPUP_EVIDENCE,
+        label="Evidence",
+        group=POPUP_INTENT_GROUP,
+        mutating=False,
+    ),
+    Intent(
+        key=POPUP_DECISION,
+        label="Decision",
         group=POPUP_INTENT_GROUP,
         mutating=False,
     ),
@@ -2300,10 +2377,12 @@ class GuiController:
     def review_highlights(self) -> dict[str, Any]:
         """The compact factlets the review tab shows instead of the detail.
 
-        Cost, evidence conflicts and the judge are *summaries* here and full
-        windows in their popups, so the main tab never reserves space for data it
-        does not have: an unused judge and an empty conflict list cost one line
-        each, and the cost area is a single line plus one button.
+        The whole lower half of the review tab is these five short values - the
+        evidence count, the conflict count, whether the judge was used, the
+        decision status and the cost - with the full information behind one button
+        each. The tab itself renders no table, no text panel and no section for
+        them, so an unused judge or an empty conflict list costs one short line
+        and the advisor panes keep the height.
         """
         review = self._review or {}
         conflicts = [
@@ -2313,6 +2392,9 @@ class GuiController:
         ]
         judge = _mapping(review.get("judge"))
         used = bool(judge.get("consulted"))
+        decision = _mapping(review.get("decision"))
+        evidence = _mapping(review.get("evidence"))
+        findings = len(evidence.get("findings") or ())
         total = _mapping(_mapping(review.get("cost")).get("total"))
         return {
             "cost_summary": self.total_cost_text(),
@@ -2328,17 +2410,40 @@ class GuiController:
                 if used
                 else "Judge not used"
             ),
+            # The one line the tab itself shows, one entry per value. They are
+            # honest before the first review: no count is invented and the cost
+            # line says there is nothing to bill yet.
+            "evidence_count": findings if evidence else None,
+            "evidence_line": (
+                f"Evidence: {findings}" if evidence else "Evidence: -"
+            ),
+            "conflicts_line": f"Conflicts: {len(conflicts)}",
+            "judge_line": (
+                f"Judge: used ({judge.get('status') or '-'})"
+                if used
+                else "Judge: not used"
+            ),
+            "decision_line": f"Decision: {decision.get('status') or '-'}",
+            "cost_line": self._cost_line(total),
         }
+
+    def _cost_line(self, total: Mapping[str, Any]) -> str:
+        """The cost as one short value: the amount, or why there is none."""
+        if not total:
+            return "Cost: -"
+        if not total.get("available"):
+            return f"Cost: unavailable ({total.get('reason') or 'no reason'})"
+        return f"Cost: {_number(total.get('total_usd')):.4f} USD"
 
     def review_view(self) -> dict[str, Any]:
         """The Architecture Review tab, as plain data.
 
-        The tab is laid out in two levels, and so is this model: one read-only
-        pane per advisor (side by side, for comparison) and, below them, the
-        *shared* results - merged evidence, conflicts, the judge, the advisory
-        decision and the cost. Everything comes from the core's review payload;
-        before the first review the panes are labelled from configuration and the
-        shared sections say so explicitly - never a fake result.
+        The tab is two things: one read-only pane per advisor (side by side, for
+        comparison) and **one compact summary line** - the evidence count, the
+        conflict count, the judge, the decision status and the cost - with the
+        full information of each behind a button. Everything comes from the core's
+        review payload; before the first review the panes are labelled from
+        configuration and the summary says so explicitly - never a fake result.
         """
         review = self._review
         if review is None:
@@ -3015,23 +3120,64 @@ class GuiController:
     # already holds, so a popup can never disagree with the main window.
 
     def popup_view(self, key: str) -> dict[str, Any]:
-        """The spec for one popup window, or ``{}`` when there is no such window."""
+        """The spec for one popup window, or ``{}`` when there is no such window.
+
+        The spec is stamped here - and only here - with the window's *stable*
+        identity and its size category, so no builder can drift from the one
+        standard and every window is remembered, raised and sized the same way.
+        """
         if key in POPUP_ADVISOR_KEYS:
-            return self.advisor_popup(POPUP_ADVISOR_KEYS.index(key))
-        builders = {
-            POPUP_COST: self.cost_popup,
-            POPUP_LOGS: self.logs_popup,
-            POPUP_AUDIT: self.audit_popup,
-            POPUP_RISKS: self.risks_popup,
-            POPUP_REPORTS: self.reports_popup,
-            POPUP_PROJECT: self.project_popup,
-            POPUP_ARCHITECTURE: self.architecture_popup,
-            POPUP_SUPERVISOR: self.supervisor_popup,
-            POPUP_JUDGE: self.judge_popup,
-            POPUP_CONFLICTS: self.conflicts_popup,
+            spec = self.advisor_popup(POPUP_ADVISOR_KEYS.index(key))
+        else:
+            builders = {
+                POPUP_COST: self.cost_popup,
+                POPUP_LOGS: self.logs_popup,
+                POPUP_AUDIT: self.audit_popup,
+                POPUP_RISKS: self.risks_popup,
+                POPUP_REPORTS: self.reports_popup,
+                POPUP_PROJECT: self.project_popup,
+                POPUP_ARCHITECTURE: self.architecture_popup,
+                POPUP_SUPERVISOR: self.supervisor_popup,
+                POPUP_JUDGE: self.judge_popup,
+                POPUP_CONFLICTS: self.conflicts_popup,
+                POPUP_EVIDENCE: self.evidence_popup,
+                POPUP_DECISION: self.decision_popup,
+                POPUP_SNAPSHOT_INTENT: self.snapshot_popup,
+            }
+            builder = builders.get(str(key))
+            spec = {} if builder is None else builder()
+        if not spec:
+            return {}
+        window = POPUP_WINDOW_KEYS.get(str(key), f"popup.{key}")
+        return {
+            **spec,
+            "window": window,
+            "size": POPUP_WINDOW_SIZES.get(str(key), "medium"),
         }
-        builder = builders.get(str(key))
-        return {} if builder is None else builder()
+
+    def snapshot_popup(self) -> dict[str, Any]:
+        """The monitor snapshot: the canonical projection as pretty-printed JSON.
+
+        A read-only copy of what the core reported - the same text the old dialog
+        showed - in a scrollable window, so nothing is reformatted, summarised or
+        interpreted here.
+        """
+        return {
+            "title": "Monitor Snapshot",
+            "note": (
+                "The canonical monitor projection exactly as the core produced "
+                "it, pretty-printed. Read-only: nothing in this window can change "
+                "the project."
+            ),
+            "sections": [
+                _popup_text(
+                    "Projection (JSON)",
+                    self.snapshot_json().splitlines(),
+                    empty="No projection has been read yet.",
+                )
+            ],
+        }
+
 
     def cost_popup(self) -> dict[str, Any]:
         """The full cost picture: total, per provider, the judge and the records.
@@ -3476,7 +3622,7 @@ class GuiController:
         context = dict(raw_context) if isinstance(raw_context, Mapping) else {}
         verdict = _mapping(payload.get("verdict"))
         return {
-            "title": "Supervisor - technical details",
+            "title": "Supervisor Details",
             "note": (
                 "The bounded fact sheet, the supervision identity, the report "
                 "identity, the gate verdict, the persisted deadlines and the status "
@@ -3665,7 +3811,7 @@ class GuiController:
             for conflict in conflicts
         ]
         return {
-            "title": "Evidence Conflicts",
+            "title": "Conflicts",
             "note": (
                 f"{len(rows)} validated conflict(s). A conflict is explicit "
                 "metadata, never inferred from text, severity or overlap; the judge "
@@ -3703,6 +3849,84 @@ class GuiController:
                 )
         return resolved
 
+    def evidence_popup(self) -> dict[str, Any]:
+        """The whole merged evidence: the counts the tab keeps to one line.
+
+        The main tab no longer spends a table on this - it shows ``Evidence: n`` -
+        so the summary line, every merged-evidence fact and what each advisor
+        contributed are here, in the same window every other detail view uses.
+        """
+        evidence = _mapping((self._review or {}).get("evidence"))
+        if not evidence:
+            note = (
+                "Merged evidence: no architecture review has been run in this "
+                "session."
+            )
+        else:
+            note = (
+                f"{len(evidence.get('findings') or ())} finding(s) | "
+                f"{len(evidence.get('supporting_ids') or ())} supporting | "
+                f"{len(evidence.get('conflicting_ids') or ())} conflicting | "
+                f"{len(evidence.get('unresolved_ids') or ())} unresolved | "
+                f"{len(evidence.get('conflicts') or ())} validated conflict(s)"
+            )
+        return {
+            "title": "Merged Evidence",
+            "note": note,
+            "sections": [
+                _popup_table(
+                    "Merged evidence",
+                    POPUP_FACT_COLUMNS,
+                    self.merged_evidence_rows(),
+                    empty="Merged evidence: no architecture review yet.",
+                ),
+                _popup_table(
+                    "What each advisor contributed",
+                    POPUP_EVIDENCE_COLUMNS,
+                    self._advisor_evidence_rows(),
+                    empty="No advisor answered yet.",
+                ),
+            ],
+        }
+
+    def _advisor_evidence_rows(self) -> list[list[str]]:
+        """One row per advisor pane: status, severity, relation and references."""
+        return [
+            [
+                str(panel.get("name") or "-"),
+                str(panel.get("status_text") or "-"),
+                str(panel.get("severity") or "-"),
+                str(panel.get("relation") or "-"),
+                str(panel.get("anchor") or "-"),
+                ", ".join(
+                    str(item) for item in (panel.get("evidence") or ())
+                )
+                or "-",
+            ]
+            for panel in self.provider_panels()
+        ]
+
+    def decision_popup(self) -> dict[str, Any]:
+        """The advisory decision in full - the tab now keeps only its status."""
+        return {
+            "title": "Review Decision",
+            "note": (
+                "The advisory decision explains what the merged evidence means. "
+                "It is advisory only: the deterministic gate remains the only "
+                "verdict, and nothing here can override it."
+            ),
+            "sections": [
+                _popup_text(
+                    "Advisory decision",
+                    self.decision_lines(),
+                    empty=(
+                        "No architecture review has been run in this session, so "
+                        "there is no decision to show."
+                    ),
+                )
+            ],
+        }
+
     def advisor_popup(self, index: int) -> dict[str, Any]:
         """One advisor's complete read-only result - everything the pane omits.
 
@@ -3713,7 +3937,7 @@ class GuiController:
         panels = self.provider_panels()
         if not 0 <= index < len(panels):
             return {
-                "title": "Advisor details",
+                "title": "Advisor Details",
                 "note": "That advisor pane does not exist in this session.",
                 "sections": [_popup_text("Details", (), empty="No advisor.")],
             }
@@ -3724,7 +3948,7 @@ class GuiController:
             if len(tuple(row)) >= 2
         ]
         return {
-            "title": f"{panel.get('name') or 'Advisor'} - details",
+            "title": f"{panel.get('name') or 'Advisor'} Details",
             "note": (
                 "Read-only advisor result. No API key, no Authorization header and "
                 "no raw provider response body is shown: the panel never receives "

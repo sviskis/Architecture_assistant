@@ -249,6 +249,8 @@ class TestNoWritePath:
             "supervisor_technical",
             "review_judge_details",
             "review_conflict_details",
+            "review_evidence_details",
+            "review_decision_details",
             "advisor_details_1",
             "advisor_details_2",
             "advisor_details_3",

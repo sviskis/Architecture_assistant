@@ -8,7 +8,7 @@ This module is the only place that reads or writes those preferences.
 Three rules shape it:
 
 * **presentation only.** A layout holds numbers, one tab title and one geometry
-  per popup title - nothing an action needs. It never holds an operator name, a
+  per popup window - nothing an action needs. It never holds an operator name, a
   token, a path, a project, a step or any other secret or domain state, and it
   never goes into the assistant's SQLite source of truth: a *preference* is not
   domain state, the core must be able to run with no layout file at all, and a
@@ -81,12 +81,14 @@ MAX_SASHES = 8
 MAX_SASH_POSITION = 100_000
 
 #: How many popup windows are remembered. The cap is deliberately larger than the
-#: number of windows the panel can open (thirteen: logs, audit, risks, reports,
+#: number of windows the panel can open (sixteen: logs, audit, risks, reports,
 #: cost, the judge, the conflicts, three advisor details, the supervisor, the
-#: project and the architecture details), so opening every one of them still
-#: remembers every one of them. The *names* are the popup titles, which are stable
-#: strings, so a remembered size is matched to a window by title.
-MAX_POPUPS = 16
+#: project, the architecture details, the monitor snapshot, the plan preview and
+#: the error window), so opening every one of them still remembers every one of
+#: them. The *names* are the stable window keys the panel hands in
+#: (``popup.logs``, ``popup.cost``, ...): a label that gets reworded never moves a
+#: window, and a window is matched to its remembered size by that key alone.
+MAX_POPUPS = 24
 
 #: The longest splitter name and tab title the file may carry.
 MAX_SPLIT_NAME = 64
@@ -181,26 +183,27 @@ def normalise_layout(raw: Any) -> dict[str, Any]:
 def _clean_windows(value: Any) -> dict[str, str]:
     """Every remembered popup geometry that is usable as it is.
 
-    A popup is remembered *by its title* - a stable string, never a widget path -
-    and only by the same validated ``WxH[+X+Y]`` shape the main window uses. A
-    title that is not printable, a geometry Tk could not accept, or more entries
-    than the cap are all simply dropped: a damaged preference costs the operator
-    one popup's position and nothing else.
+    A popup is remembered by its *stable window key* - ``popup.logs``, never a
+    widget path and never a title - and only by the same validated
+    ``WxH[+X+Y]`` shape the main window uses. A key that is not printable, a
+    geometry Tk could not accept, or more entries than the cap are all simply
+    dropped: a damaged preference costs the operator one popup's position and
+    nothing else.
     """
     if not isinstance(value, Mapping):
         return {}
     cleaned: dict[str, str] = {}
-    for title, geometry in value.items():
-        if not isinstance(title, str) or not title:
+    for window_key, geometry in value.items():
+        if not isinstance(window_key, str) or not window_key:
             continue
-        if len(title) > MAX_TAB_TITLE or not title.isprintable():
+        if len(window_key) > MAX_TAB_TITLE or not window_key.isprintable():
             continue
         parsed = parse_geometry(geometry)
         if parsed is None:
             continue
         if len(cleaned) >= MAX_POPUPS:
             break
-        cleaned[title] = format_geometry(*parsed)
+        cleaned[window_key] = format_geometry(*parsed)
     return cleaned
 
 
