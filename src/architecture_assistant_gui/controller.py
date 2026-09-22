@@ -24,6 +24,12 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 from architecture_assistant.composition import (
+    ACTION_CANCEL,
+    ACTION_GENERATE_FINAL_SYNTHESIS,
+    ACTION_GENERATE_LEAD_REVIEW,
+    ACTION_GENERATE_PROPOSAL,
+    ACTION_RUN_ROUND1,
+    ACTION_RUN_ROUND2,
     EVENT_LEVEL_ERROR,
     EVENT_LEVEL_INFO,
     EVENT_LEVEL_WARN,
@@ -96,6 +102,29 @@ PROPOSAL_DECISION_INTENTS = frozenset(
 
 #: Every proposal action, in the order the panel offers them.
 PROPOSAL_INTENTS = frozenset({"synthesize_proposal"}) | PROPOSAL_DECISION_INTENTS
+
+#: The deliberation workbench's own actions (Step 29). Each one is a single,
+#: explicit stage - there is deliberately no "run everything" verb, because the
+#: two-round protocol is staged and the operator decides when to advance it.
+DELIBERATION_STAGE_INTENTS: tuple[tuple[str, str], ...] = (
+    ("deliberation_round1", ACTION_RUN_ROUND1),
+    ("deliberation_lead_review", ACTION_GENERATE_LEAD_REVIEW),
+    ("deliberation_round2", ACTION_RUN_ROUND2),
+    ("deliberation_synthesis", ACTION_GENERATE_FINAL_SYNTHESIS),
+)
+DELIBERATION_PROPOSAL_INTENT = "deliberation_proposal"
+DELIBERATION_CANCEL_INTENT = "deliberation_cancel"
+DELIBERATION_INTENTS = frozenset(
+    [key for key, _action in DELIBERATION_STAGE_INTENTS]
+    + [DELIBERATION_PROPOSAL_INTENT]
+)
+
+#: Which lifecycle verb each deliberation button stands for.
+DELIBERATION_ACTION_BY_INTENT: dict[str, str] = {
+    **{key: action for key, action in DELIBERATION_STAGE_INTENTS},
+    DELIBERATION_PROPOSAL_INTENT: ACTION_GENERATE_PROPOSAL,
+    DELIBERATION_CANCEL_INTENT: ACTION_CANCEL,
+}
 
 #: Supervision statuses in which a human may still act on a directive. ``SENT``
 #: is deliberately absent: a delivered directive is resolved only by a **new**
@@ -204,6 +233,11 @@ CLEAR_LOGS_INTENT = "clear_logs"
 #: panel's ``GROUPS``: a popup button lives in the popup or in the compact
 #: utility bar, and is never duplicated into the generic Actions panel.
 POPUP_INTENT_GROUP = "Windows"
+
+#: The deliberation workbench's buttons live **inside** the Deliberation tab, so
+#: their group is deliberately absent from the panel's ``GROUPS``: the controls
+#: belong beside the review they advance, not in the generic action list.
+DELIBERATION_INTENT_GROUP = "Deliberation workbench"
 
 #: Everything that only *displays* the last payload. These queue no core work, so
 #: they stay available while an action runs and after a CRITICAL failure: an
@@ -325,6 +359,55 @@ INTENTS: tuple[Intent, ...] = (
             "incur provider cost. It changes no workflow state and writes "
             "nothing. Continue?"
         ),
+    ),
+    # The deliberation workbench's own buttons: they are built inside the
+    # Deliberation tab (their group is not in the panel's ``GROUPS``), and the
+    # controller still owns them like every other action - the view only reports
+    # which key was pressed.
+    Intent(
+        key="deliberation_round1",
+        label="Run Round 1",
+        group=DELIBERATION_INTENT_GROUP,
+        mutating=False,
+        confirmation=(
+            "Round 1 asks both configured architects the same requirement "
+            "independently and may incur provider cost. It writes the run and "
+            "one audit entry, and approves nothing. Continue?"
+        ),
+    ),
+    Intent(
+        key="deliberation_lead_review",
+        label="Generate Lead Review",
+        group=DELIBERATION_INTENT_GROUP,
+        mutating=False,
+    ),
+    Intent(
+        key="deliberation_round2",
+        label="Run Round 2",
+        group=DELIBERATION_INTENT_GROUP,
+        mutating=False,
+    ),
+    Intent(
+        key="deliberation_synthesis",
+        label="Generate Final Synthesis",
+        group=DELIBERATION_INTENT_GROUP,
+        mutating=False,
+    ),
+    Intent(
+        key="deliberation_proposal",
+        label="Generate Architecture Proposal",
+        group=DELIBERATION_INTENT_GROUP,
+        mutating=True,
+        human=True,
+        reason_prompt="Why is this deliberation's synthesis becoming a proposal?",
+    ),
+    Intent(
+        key="deliberation_cancel",
+        label="Cancel Deliberation",
+        group=DELIBERATION_INTENT_GROUP,
+        mutating=True,
+        human=True,
+        reason_prompt="Why is this deliberation being cancelled?",
     ),
     # The provider-settings header lives *inside* each advisor pane, so these
     # actions are grouped under a name the Actions panel does not render: the
@@ -655,6 +738,10 @@ class GuiController:
         #: The operator's review question (kept verbatim) and the last review.
         self._review_question = review_question
         self._review: Optional[dict[str, Any]] = None
+        #: The newest deliberation snapshot, or ``None`` before one is started.
+        #: Plain data only, exactly like ``_review``: the controller never holds
+        #: a core object and never reads a repository.
+        self._deliberation: Optional[dict[str, Any]] = None
         self._review_progress = ""
         #: What the operator has typed into the advisor panes' configuration
         #: header, per advisor slot. Plain data only, and the API key is only ever
@@ -934,9 +1021,49 @@ class GuiController:
             )
         if intent.key in PROPOSAL_INTENTS:
             return self._proposal_action(intent.key, reason)
+        if intent.key in DELIBERATION_INTENTS:
+            return self._deliberation_action(intent.key, reason)
+        if intent.key == DELIBERATION_CANCEL_INTENT:
+            return self._deliberation_cancel_action(reason)
         if intent.key in SUPERVISOR_INTENTS:
             return self._supervisor_action(intent.key, reason)
         return self._mutation_action(intent.key, reason)
+
+    def _deliberation_action(
+        self, key: str, reason: str
+    ) -> Callable[[Any], dict[str, Any]]:
+        """One deliberation stage - started from the requirement field."""
+
+        def action(worker: Any) -> dict[str, Any]:
+            requirement = self._proposal_requirement
+            if key == "deliberation_round1":
+                # The first stage also **starts** (or re-opens) the run, so the
+                # operator never has to press a second button to create one.
+                if not worker.deliberation_board().get("current"):
+                    started = worker.start_deliberation(
+                        requirement, actor=self.actor, reason=reason
+                    )
+                    return {
+                        "deliberation": started["deliberation"],
+                        "board": started["board"],
+                    }
+            return worker.run_deliberation_stage(
+                DELIBERATION_ACTION_BY_INTENT[key],
+                actor=self.actor,
+                reason=reason,
+            )
+
+        return action
+
+    def _deliberation_cancel_action(
+        self, reason: str
+    ) -> Callable[[Any], dict[str, Any]]:
+        def action(worker: Any) -> dict[str, Any]:
+            return worker.run_deliberation_stage(
+                ACTION_CANCEL, actor=self.actor, reason=reason
+            )
+
+        return action
 
     def _read_action(self) -> Callable[[Any], dict[str, Any]]:
         def action(worker: Any) -> dict[str, Any]:
@@ -1859,6 +1986,165 @@ class GuiController:
             self._review_progress = str(message)
             self._status = f"Architecture review: {self._review_progress}"
 
+    # -- the deliberation tab ---------------------------------------------
+
+    @property
+    def deliberation(self) -> Optional[dict[str, Any]]:
+        """The last deliberation snapshot the core handed over, or ``None``."""
+        return None if self._deliberation is None else dict(self._deliberation)
+
+    @property
+    def deliberation_id(self) -> str:
+        """The id of the deliberation in view, or ``""``."""
+        return str((self._deliberation or {}).get("deliberation_id") or "")
+
+    def set_deliberation(self, payload: Any) -> None:
+        """Remember one snapshot - plain data only, never a core object."""
+        self._deliberation = (
+            dict(payload) if isinstance(payload, Mapping) else None
+        )
+
+    def clear_deliberation(self) -> None:
+        """Forget the snapshot (a new requirement starts a new board)."""
+        self._deliberation = None
+
+    def _deliberation_rows(self, slot: str) -> list[list[str]]:
+        """The compact rows of one seat's pane."""
+        snapshot = self._deliberation or {}
+        stages = _mapping(snapshot.get("stages"))
+        seats = _mapping(snapshot.get("seats"))
+        seat = _mapping(seats.get(slot))
+        if not snapshot:
+            return [["State", "no deliberation yet"]]
+        rows: list[list[str]] = [
+            ["Provider", str(seat.get("provider") or "-")],
+            ["Model", str(seat.get("model") or "-")],
+            ["Seat", "enabled" if seat.get("enabled") else "disabled"],
+        ]
+        if slot == "lead":
+            rows.extend(
+                [
+                    [
+                        "Deliberation ID",
+                        str(snapshot.get("deliberation_id") or "-"),
+                    ],
+                    ["Stage", str(snapshot.get("status") or "-")],
+                    ["Revision", str(snapshot.get("revision_no", 1))],
+                ]
+            )
+            for name, label in (
+                ("AGENT_A_ROUND1", "Agent A Round 1"),
+                ("AGENT_B_ROUND1", "Agent B Round 1"),
+                ("LEAD_REVIEW", "Lead Review"),
+                ("AGENT_A_ROUND2", "Agent A Round 2"),
+                ("AGENT_B_ROUND2", "Agent B Round 2"),
+                ("FINAL_SYNTHESIS", "Final Synthesis"),
+            ):
+                stage = _mapping(stages.get(name))
+                rows.append([label, str(stage.get("status") or "PENDING")])
+            counts = _mapping(snapshot.get("counts"))
+            for name, label in (
+                ("agreements", "Agreements"),
+                ("conflicts", "Conflicts"),
+                ("open_questions", "Open questions"),
+                ("risks", "Risks"),
+                ("remaining_disagreements", "Disagreements"),
+            ):
+                rows.append([label, str(counts.get(name, 0))])
+            if snapshot.get("error_reason"):
+                rows.append(["Blocked", _brief(snapshot.get("error_reason"))])
+            if snapshot.get("stale_reason"):
+                rows.append(["Stale", _brief(snapshot.get("stale_reason"))])
+            return rows
+        prefix = "AGENT_A" if slot == "agent_a" else "AGENT_B"
+        for name, label in (
+            (f"{prefix}_ROUND1", "Round 1"),
+            (f"{prefix}_ROUND2", "Round 2"),
+        ):
+            stage = _mapping(stages.get(name))
+            rows.append([label, str(stage.get("status") or "PENDING")])
+            if stage.get("decision"):
+                rows.append([f"{label} decision", str(stage["decision"])])
+            if stage.get("reason"):
+                rows.append([f"{label} reason", _brief(stage["reason"])])
+        return rows
+
+    def _deliberation_buttons(self) -> dict[str, bool]:
+        """Which stage control is valid **now** - computed by the core."""
+        snapshot = self._deliberation or {}
+        available = {
+            str(item) for item in (snapshot.get("available_actions") or ())
+        }
+        id_ready = bool(snapshot.get("deliberation_id"))
+        busy = self.is_busy
+        mapping = {
+            "deliberation_round1": ACTION_RUN_ROUND1,
+            "deliberation_lead_review": ACTION_GENERATE_LEAD_REVIEW,
+            "deliberation_round2": ACTION_RUN_ROUND2,
+            "deliberation_synthesis": ACTION_GENERATE_FINAL_SYNTHESIS,
+            "deliberation_proposal": ACTION_GENERATE_PROPOSAL,
+            "deliberation_cancel": ACTION_CANCEL,
+        }
+        return {
+            key: bool(id_ready and not busy and action in available)
+            for key, action in mapping.items()
+        }
+
+    def deliberation_view(self) -> dict[str, Any]:
+        """The Deliberation tab, as plain data.
+
+        The centre pane is the chair's: the id, the stage, the six-stage checklist
+        and the compact counts. Each side pane is one independent architect with
+        its own two stage rows. The cost line states the honest total (or that no
+        stage reported telemetry) and never invents an amount.
+        """
+        snapshot = self._deliberation or {}
+        counts = _mapping(snapshot.get("counts"))
+        cost = _mapping(snapshot.get("cost"))
+        if not snapshot:
+            status = (
+                "No deliberation yet. Enter the requirement, choose the two "
+                "architects and the lead, then run Round 1."
+            )
+        else:
+            status = (
+                f"Deliberation {snapshot.get('deliberation_id')} is "
+                f"{snapshot.get('status')} (rounds "
+                f"{snapshot.get('max_review_rounds', 1)}, revision "
+                f"{snapshot.get('revision_no', 1)})"
+            )
+        if cost.get("available"):
+            cost_line = (
+                f"Total deliberation cost: {cost.get('total_usd')} USD "
+                f"({cost.get('priced_stages', 0)} priced, "
+                f"{cost.get('unpriced_stages', 0)} unavailable)"
+            )
+        else:
+            cost_line = (
+                "Total deliberation cost: unavailable - "
+                f"{cost.get('reason') or 'no stage reported telemetry'}"
+            )
+        return {
+            "status": status,
+            "requirement": str(snapshot.get("requirement") or ""),
+            "cost": cost_line,
+            "agent_a_rows": self._deliberation_rows("agent_a"),
+            "lead_rows": self._deliberation_rows("lead"),
+            "agent_b_rows": self._deliberation_rows("agent_b"),
+            "agent_a_summary": (
+                f"Round 1: {counts.get('open_questions', 0)} open question(s); "
+                "independent analysis"
+            ),
+            "lead_summary": (
+                f"Agreements {counts.get('agreements', 0)} | "
+                f"Conflicts {counts.get('conflicts', 0)} | "
+                f"Open questions {counts.get('open_questions', 0)} | "
+                f"Risks {counts.get('risks', 0)}"
+            ),
+            "agent_b_summary": "Independent analysis; never sees Agent A first",
+            "buttons": self._deliberation_buttons(),
+        }
+
     def _review_summary(self) -> str:
         """One status line for a finished review - honest about what happened."""
         review = self._review or {}
@@ -2438,6 +2724,11 @@ class GuiController:
         proposal = payload.get("proposal")
         if isinstance(proposal, Mapping):
             self._proposal = dict(proposal)
+        deliberation = payload.get("deliberation")
+        if isinstance(deliberation, Mapping):
+            # A finished deliberation stage: plain data, rendered by the
+            # Deliberation tab. Nothing here decides anything.
+            self.set_deliberation(deliberation)
         settings = payload.get("settings")
         if isinstance(settings, Mapping):
             # A finished provider-settings save: the note and a log line only.
@@ -3641,6 +3932,7 @@ class GuiController:
             "work": self.work_panel(),
             "buttons": buttons,
             "review": self.review_view(),
+            "deliberation": self.deliberation_view(),
             "proposal": self.proposal_view(),
             "supervisor": self.supervisor_view(),
             "monitor": {"rows": self.monitor_rows()},

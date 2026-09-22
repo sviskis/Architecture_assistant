@@ -28,9 +28,16 @@ from .evolution import (
     reconcile_declared_changes,
 )
 from .root import (
+    ACTION_CANCEL,
+    ACTION_GENERATE_FINAL_SYNTHESIS,
+    ACTION_GENERATE_LEAD_REVIEW,
+    ACTION_GENERATE_PROPOSAL,
+    ACTION_RUN_ROUND1,
+    ACTION_RUN_ROUND2,
     DEFAULT_REPORT_DIR,
     DEFAULT_REVIEW_QUESTION,
     DEFAULT_SOURCE_ROOT,
+    DELIBERATION_ACTIONS,
     apply_provider_settings,
     EVENT_LEVEL_ERROR,
     EVENT_LEVEL_INFO,
@@ -63,9 +70,13 @@ from ..ports.capabilities import ConnectionStatus
 from .advisor_factory import (
     PROVIDER_DEFAULT_MODELS,
     AdvisorFactory,
+    assemble_deliberation,
     assemble_reviewers,
+    create_deliberation_agent,
+    create_deliberation_lead,
     default_model_for,
     probe_connection,
+    probe_deliberation,
     provider_catalog,
 )
 from .provider_settings import (
@@ -99,6 +110,14 @@ __all__ = [
     "DEFAULT_SOURCE_ROOT",
     "DEFAULT_REPORT_DIR",
     "DEFAULT_REVIEW_QUESTION",
+    # the deliberation lifecycle verbs the panel offers (Step 29)
+    "DELIBERATION_ACTIONS",
+    "ACTION_RUN_ROUND1",
+    "ACTION_GENERATE_LEAD_REVIEW",
+    "ACTION_RUN_ROUND2",
+    "ACTION_GENERATE_FINAL_SYNTHESIS",
+    "ACTION_GENERATE_PROPOSAL",
+    "ACTION_CANCEL",
     "apply_provider_settings",
     # the log-event contract (Step 27)
     "EVENT_LEVELS",
@@ -140,6 +159,11 @@ __all__ = [
     "default_model_for",
     "probe_connection",
     "provider_catalog",
+    # the deliberation seats and chair (Step 29)
+    "assemble_deliberation",
+    "create_deliberation_agent",
+    "create_deliberation_lead",
+    "probe_deliberation",
     # per-advisor provider settings (which provider/model/key each slot uses)
     "ADVISOR_KEYS",
     "DEFAULT_PROVIDER_BY_ADVISOR",

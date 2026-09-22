@@ -35,8 +35,16 @@ from ..application import (
     EVENT_LEVEL_WARN,
     EVENT_LEVELS,
     LOG_COMPONENTS,
+    ACTION_CANCEL,
+    ACTION_GENERATE_FINAL_SYNTHESIS,
+    ACTION_GENERATE_LEAD_REVIEW,
+    ACTION_GENERATE_PROPOSAL,
+    ACTION_RUN_ROUND1,
+    ACTION_RUN_ROUND2,
+    DELIBERATION_ACTIONS,
     ApprovalGate,
     ArchitectureBootstrap,
+    ArchitectureDeliberation,
     ArchitectureEvolution,
     ArchitectureReview,
     ArchitectureSynthesis,
@@ -100,7 +108,11 @@ from .evolution import (
 )
 from .evidence import observe
 from .realization import ArchitectureRealizationAdapter
-from .advisor_factory import AdvisorFactory, assemble_reviewers
+from .advisor_factory import (
+    AdvisorFactory,
+    assemble_deliberation,
+    assemble_reviewers,
+)
 from .provider_settings import (
     DEFAULT_PROVIDER_SETTINGS_PATH,
     SETTINGS_STATUS_LOADED,
@@ -115,6 +127,13 @@ __all__ = [
     "DEFAULT_SOURCE_ROOT",
     "DEFAULT_REPORT_DIR",
     "DEFAULT_REVIEW_QUESTION",
+    "DELIBERATION_ACTIONS",
+    "ACTION_RUN_ROUND1",
+    "ACTION_GENERATE_LEAD_REVIEW",
+    "ACTION_RUN_ROUND2",
+    "ACTION_GENERATE_FINAL_SYNTHESIS",
+    "ACTION_GENERATE_PROPOSAL",
+    "ACTION_CANCEL",
     "DEFAULT_PROVIDER_SETTINGS_PATH",
     "apply_provider_settings",
     "EVENT_LEVELS",
@@ -381,6 +400,17 @@ class Composition:
     #: valid conflict, and a JSON-safe result. It writes nothing, changes no
     #: workflow state and can never reach ``VERIFIED``.
     architecture_review: ArchitectureReview
+
+    #: The controlled **architecture deliberation** (Step 29): the two-round,
+    #: advisory review board over one operator requirement - two independent
+    #: architects, a chair's review, one bounded reconsideration each and a final
+    #: synthesis that can become a managed-project proposal. It is wired with the
+    #: deliberation repository, the proposal repository, the project repository,
+    #: the audit trail and the shared transaction boundary - and **no**
+    #: ``ArchitectureEvolution``, ``ArchitectureVersioning``, ``ADRManager``,
+    #: ``RiskManager``, monitor, orchestrator, worker or realization port. It
+    #: approves nothing and reaches ``VERIFIED`` never.
+    architecture_deliberation: ArchitectureDeliberation
 
     #: The provider configuration this graph was wired with: which provider,
     #: which model and which (local) key each advisor slot uses. It is held so
@@ -764,6 +794,20 @@ def compose(config: Optional[CompositionConfig] = None) -> Composition:
         clock=resolved.clock,
     )
 
+    # 14. The controlled **architecture deliberation**. Its seats come from the
+    #     same provider configuration the panel edits, and its collaborators are
+    #     exactly the deliberation repository, the proposal repository, the
+    #     project repository, the audit trail and the shared transaction boundary.
+    #     A proposal it generates is a DRAFT, and only the human path above can
+    #     ever decide it.
+    architecture_deliberation = _build_architecture_deliberation(
+        storage,
+        provider_settings,
+        project=resolved.project_name,
+        cost_sink=cost_plugin,
+        clock=resolved.clock,
+    )
+
     return Composition(
         config=resolved,
         connection=connection,
@@ -794,6 +838,7 @@ def compose(config: Optional[CompositionConfig] = None) -> Composition:
         human_override=human_override,
         plan_loader=plan_loader,
         architecture_review=architecture_review,
+        architecture_deliberation=architecture_deliberation,
         provider_settings=provider_settings,
         provider_settings_status=provider_settings_load.status,
         architecture_synthesis=architecture_synthesis,
@@ -865,6 +910,39 @@ def _build_architecture_review(
     )
 
 
+def _build_architecture_deliberation(
+    storage: Any,
+    settings: ProviderSettings,
+    *,
+    project: str,
+    cost_sink: CostPort,
+    clock: Callable[[], datetime],
+) -> ArchitectureDeliberation:
+    """The deliberation board, wired from one provider configuration.
+
+    Wiring only: it turns the operator's ``agent_a``/``agent_b``/``lead`` slots
+    into two seats and a chair and hands the use-case its five collaborators. It
+    contains no policy, decides nothing and approves nothing.
+    """
+    agent_a, agent_b, chair = assemble_deliberation(
+        settings,
+        project=project,
+        cost_sink=cost_sink,
+        clock=clock,
+    )
+    return ArchitectureDeliberation(
+        storage.deliberations,
+        storage.proposals,
+        storage.projects,
+        storage.audit,
+        storage,
+        agent_a=agent_a,
+        agent_b=agent_b,
+        chair=chair,
+        clock=clock,
+    )
+
+
 def apply_provider_settings(
     composition: "Composition", settings: ProviderSettings
 ) -> None:
@@ -902,4 +980,16 @@ def apply_provider_settings(
         check=composition.realization_adapter,
         cost_query=composition.cost_plugin.query,
         clock=composition.config.clock,
+    )
+    # The deliberation seats are re-placed too: a saved configuration must apply
+    # to the review board exactly as it applies to the quick review. A run that is
+    # already underway is never re-pointed - its fingerprint records who answered.
+    agent_a, agent_b, chair = assemble_deliberation(
+        settings,
+        project=composition.config.project_name,
+        cost_sink=composition.cost_plugin,
+        clock=composition.config.clock,
+    )
+    composition.architecture_deliberation.configure(
+        agent_a=agent_a, agent_b=agent_b, chair=chair
     )

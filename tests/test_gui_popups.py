@@ -234,6 +234,7 @@ class TestTheMainWindowStaysCompact:
         assert titles == [
             "Monitor",
             "Architecture Review",
+            "Deliberation",
             "Architecture Proposal",
             "Supervisor",
         ]

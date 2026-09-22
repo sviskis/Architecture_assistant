@@ -17,6 +17,8 @@ from typing import Optional, Protocol, runtime_checkable
 from ..domain.audit import AuditEntityType, AuditEntry
 from ..domain.enums import (
     ACRStatus,
+    DeliberationStage,
+    DeliberationStatus,
     ProposalStatus,
     StepState,
     SupervisorStatus,
@@ -27,6 +29,8 @@ from ..domain.models import (
     ArchitectureProposal,
     ArchitectureVersion,
     Decision,
+    DeliberationArtifact,
+    DeliberationRun,
     Finding,
     Project,
     Risk,
@@ -43,6 +47,7 @@ __all__ = [
     "ArchitectureVersionRepository",
     "ArchitectureChangeRequestRepository",
     "ArchitectureProposalRepository",
+    "DeliberationRepository",
     "SupervisionRepository",
     "ADRRepository",
     "RiskRepository",
@@ -244,6 +249,58 @@ class SupervisionRepository(Protocol):
         ...
 
     def delete(self, supervision_id: str) -> bool: ...
+
+
+@runtime_checkable
+class DeliberationRepository(Protocol):
+    """Persistence port for **deliberations** and their **stage artifacts**.
+
+    Two aggregates live behind one port because they are one lifecycle: a
+    :class:`~architecture_assistant.domain.models.DeliberationRun` is the
+    identity (one operator requirement, three configured seats, one lifecycle
+    status) and every stage result is an addressable
+    :class:`~architecture_assistant.domain.models.DeliberationArtifact` row.
+
+    Deliberately **not** one opaque document: the split keeps the lifecycle
+    queryable ("which runs are ready for a proposal?"), restart-safe ("which
+    stages exist and what exactly did they say?") and attributable (each stage
+    carries its own cost telemetry), while the complex structured content of a
+    stage still lives in that artifact's own bounded JSON ``content`` column.
+
+    Key: ``deliberation_id``; an artifact is keyed by ``artifact_id``.
+    """
+
+    def upsert_run(self, run: DeliberationRun) -> None: ...
+
+    def get_run(self, deliberation_id: str) -> Optional[DeliberationRun]: ...
+
+    def list_runs(self) -> tuple[DeliberationRun, ...]: ...
+
+    def list_runs_by_status(
+        self, status: DeliberationStatus
+    ) -> tuple[DeliberationRun, ...]: ...
+
+    def list_runs_for_project(
+        self, project: str
+    ) -> tuple[DeliberationRun, ...]: ...
+
+    def upsert_artifact(self, artifact: DeliberationArtifact) -> None: ...
+
+    def get_artifact(self, artifact_id: str) -> Optional[DeliberationArtifact]: ...
+
+    def list_artifacts(
+        self, deliberation_id: str
+    ) -> tuple[DeliberationArtifact, ...]:
+        """Every stage artifact of one run, in stage order (oldest first)."""
+        ...
+
+    def list_artifacts_for_stage(
+        self, deliberation_id: str, stage: DeliberationStage, slot: str = ""
+    ) -> tuple[DeliberationArtifact, ...]:
+        """The artifacts of one stage (optionally one seat), oldest first."""
+        ...
+
+    def delete(self, deliberation_id: str) -> bool: ...
 
 
 @runtime_checkable

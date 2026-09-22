@@ -21,6 +21,8 @@ from ..domain.audit import AuditEntityType, AuditEntry
 from ..domain.enums import (
     ACRStatus,
     SUPERVISION_RECONCILE_STATUSES,
+    DeliberationStage,
+    DeliberationStatus,
     ProposalStatus,
     RiskStatus,
     StepState,
@@ -32,6 +34,8 @@ from ..domain.models import (
     ArchitectureProposal,
     ArchitectureVersion,
     Decision,
+    DeliberationArtifact,
+    DeliberationRun,
     Finding,
     Project,
     Risk,
@@ -48,6 +52,7 @@ __all__ = [
     "SqliteArchitectureVersionRepository",
     "SqliteArchitectureChangeRequestRepository",
     "SqliteArchitectureProposalRepository",
+    "SqliteDeliberationRepository",
     "SqliteSupervisionRepository",
     "SqliteADRRepository",
     "SqliteRiskRepository",
@@ -1256,3 +1261,255 @@ class SqliteSupervisionRepository(_SqliteRepository):
             "DELETE FROM supervision_records WHERE supervision_id = ?",
             (supervision_id,),
         )
+
+
+# ---------------------------------------------------------------------------
+# deliberation (Step 29) - one run row plus one addressable row per stage
+# ---------------------------------------------------------------------------
+
+#: The lifecycle order of the six stages. Artifacts are presented in *stage*
+#: order rather than in the (arbitrary) lexical order of their enum values, so a
+#: round history reads exactly as the deliberation ran.
+_DELIBERATION_STAGE_ORDER: dict[str, int] = {
+    stage: index
+    for index, stage in enumerate(
+        (
+            "AGENT_A_ROUND1",
+            "AGENT_B_ROUND1",
+            "LEAD_REVIEW",
+            "AGENT_A_ROUND2",
+            "AGENT_B_ROUND2",
+            "FINAL_SYNTHESIS",
+        )
+    )
+}
+
+
+def _row_to_deliberation_run(row: sqlite3.Row) -> DeliberationRun:
+    return DeliberationRun(
+        deliberation_id=row["deliberation_id"],
+        project=row["project"],
+        requirement=row["requirement"],
+        fingerprint=row["fingerprint"],
+        context_fingerprint=row["context_fingerprint"],
+        agent_a_provider=row["agent_a_provider"],
+        agent_a_model=row["agent_a_model"],
+        agent_b_provider=row["agent_b_provider"],
+        agent_b_model=row["agent_b_model"],
+        lead_provider=row["lead_provider"],
+        lead_model=row["lead_model"],
+        status=row["status"],
+        max_review_rounds=row["max_review_rounds"],
+        revision_no=row["revision_no"],
+        revision_of_deliberation_id=row["revision_of_deliberation_id"],
+        error_reason=row["error_reason"],
+        stale_reason=row["stale_reason"],
+        created_at=_parse_dt(row["created_at"]),
+        updated_at=_parse_dt(row["updated_at"]),
+    )
+
+
+def _row_to_deliberation_artifact(row: sqlite3.Row) -> DeliberationArtifact:
+    return DeliberationArtifact(
+        artifact_id=row["artifact_id"],
+        deliberation_id=row["deliberation_id"],
+        stage=row["stage"],
+        slot=row["slot"],
+        status=row["status"],
+        content=_json_load_map(row["content"]),
+        fingerprint=row["fingerprint"],
+        created_at=_parse_dt(row["created_at"]),
+    )
+
+
+def _stage_sort_key(artifact: DeliberationArtifact) -> tuple:
+    """A deterministic, lifecycle-ordered sort key for artifacts."""
+    return (
+        _DELIBERATION_STAGE_ORDER.get(str(artifact.stage), 99),
+        artifact.slot,
+        artifact.created_at.isoformat(),
+        artifact.artifact_id,
+    )
+
+
+class SqliteDeliberationRepository(_SqliteRepository):
+    """SQLite adapter for deliberations (key: ``deliberation_id``).
+
+    Advisory, managed-project scoped state: it never touches
+    ``architecture_versions``, ``architecture_change_requests``, ``adrs``,
+    ``risks`` or the managed project's proposal table. A run is created once and
+    then only ever advances through its lifecycle, so ``delete`` exists for
+    contract consistency with the other repositories and is never called by the
+    use-case - a deliberation must stay auditable.
+    """
+
+    _RUN_UPSERT = """
+        INSERT INTO deliberation_runs (
+            deliberation_id, project, requirement, fingerprint,
+            context_fingerprint, agent_a_provider, agent_a_model,
+            agent_b_provider, agent_b_model, lead_provider, lead_model,
+            status, max_review_rounds, revision_no,
+            revision_of_deliberation_id, error_reason, stale_reason,
+            created_at, updated_at
+        ) VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        )
+        ON CONFLICT(deliberation_id) DO UPDATE SET
+            project = excluded.project,
+            requirement = excluded.requirement,
+            fingerprint = excluded.fingerprint,
+            context_fingerprint = excluded.context_fingerprint,
+            agent_a_provider = excluded.agent_a_provider,
+            agent_a_model = excluded.agent_a_model,
+            agent_b_provider = excluded.agent_b_provider,
+            agent_b_model = excluded.agent_b_model,
+            lead_provider = excluded.lead_provider,
+            lead_model = excluded.lead_model,
+            status = excluded.status,
+            max_review_rounds = excluded.max_review_rounds,
+            revision_no = excluded.revision_no,
+            revision_of_deliberation_id = excluded.revision_of_deliberation_id,
+            error_reason = excluded.error_reason,
+            stale_reason = excluded.stale_reason,
+            created_at = excluded.created_at,
+            updated_at = excluded.updated_at
+    """
+
+    _ARTIFACT_UPSERT = """
+        INSERT INTO deliberation_artifacts (
+            artifact_id, deliberation_id, stage, slot, status, content,
+            fingerprint, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(artifact_id) DO UPDATE SET
+            deliberation_id = excluded.deliberation_id,
+            stage = excluded.stage,
+            slot = excluded.slot,
+            status = excluded.status,
+            content = excluded.content,
+            fingerprint = excluded.fingerprint,
+            created_at = excluded.created_at
+    """
+
+    def upsert_run(self, run: DeliberationRun) -> None:
+        self._upsert(
+            self._RUN_UPSERT,
+            (
+                run.deliberation_id,
+                run.project,
+                run.requirement,
+                run.fingerprint,
+                run.context_fingerprint,
+                run.agent_a_provider,
+                run.agent_a_model,
+                run.agent_b_provider,
+                run.agent_b_model,
+                run.lead_provider,
+                run.lead_model,
+                _enum_value(run.status),
+                run.max_review_rounds,
+                run.revision_no,
+                run.revision_of_deliberation_id,
+                run.error_reason,
+                run.stale_reason,
+                _iso(run.created_at),
+                _iso(run.updated_at),
+            ),
+        )
+
+    def get_run(self, deliberation_id: str) -> Optional[DeliberationRun]:
+        return self._fetch_one(
+            "SELECT * FROM deliberation_runs WHERE deliberation_id = ?",
+            (deliberation_id,),
+            _row_to_deliberation_run,
+        )
+
+    def list_runs(self) -> tuple[DeliberationRun, ...]:
+        return self._fetch_all(
+            "SELECT * FROM deliberation_runs "
+            "ORDER BY created_at ASC, deliberation_id ASC",
+            (),
+            _row_to_deliberation_run,
+        )
+
+    def list_runs_by_status(
+        self, status: DeliberationStatus
+    ) -> tuple[DeliberationRun, ...]:
+        return self._fetch_all(
+            "SELECT * FROM deliberation_runs WHERE status = ? "
+            "ORDER BY created_at ASC, deliberation_id ASC",
+            (_enum_value(status),),
+            _row_to_deliberation_run,
+        )
+
+    def list_runs_for_project(self, project: str) -> tuple[DeliberationRun, ...]:
+        return self._fetch_all(
+            "SELECT * FROM deliberation_runs WHERE project = ? "
+            "ORDER BY created_at ASC, deliberation_id ASC",
+            (project,),
+            _row_to_deliberation_run,
+        )
+
+    def upsert_artifact(self, artifact: DeliberationArtifact) -> None:
+        self._upsert(
+            self._ARTIFACT_UPSERT,
+            (
+                artifact.artifact_id,
+                artifact.deliberation_id,
+                _enum_value(artifact.stage),
+                artifact.slot,
+                _enum_value(artifact.status),
+                _json_dump_map(artifact.content),
+                artifact.fingerprint,
+                _iso(artifact.created_at),
+            ),
+        )
+
+    def get_artifact(self, artifact_id: str) -> Optional[DeliberationArtifact]:
+        return self._fetch_one(
+            "SELECT * FROM deliberation_artifacts WHERE artifact_id = ?",
+            (artifact_id,),
+            _row_to_deliberation_artifact,
+        )
+
+    def list_artifacts(
+        self, deliberation_id: str
+    ) -> tuple[DeliberationArtifact, ...]:
+        """Every artifact of one run, in lifecycle stage order."""
+        fetched = self._fetch_all(
+            "SELECT * FROM deliberation_artifacts WHERE deliberation_id = ?",
+            (deliberation_id,),
+            _row_to_deliberation_artifact,
+        )
+        return tuple(sorted(fetched, key=_stage_sort_key))
+
+    def list_artifacts_for_stage(
+        self, deliberation_id: str, stage: DeliberationStage, slot: str = ""
+    ) -> tuple[DeliberationArtifact, ...]:
+        """The artifacts of one stage (optionally one seat), oldest first."""
+        if slot:
+            return self._fetch_all(
+                "SELECT * FROM deliberation_artifacts "
+                "WHERE deliberation_id = ? AND stage = ? AND slot = ? "
+                "ORDER BY created_at ASC, artifact_id ASC",
+                (deliberation_id, _enum_value(stage), slot),
+                _row_to_deliberation_artifact,
+            )
+        return self._fetch_all(
+            "SELECT * FROM deliberation_artifacts "
+            "WHERE deliberation_id = ? AND stage = ? "
+            "ORDER BY created_at ASC, artifact_id ASC",
+            (deliberation_id, _enum_value(stage)),
+            _row_to_deliberation_artifact,
+        )
+
+    def delete(self, deliberation_id: str) -> bool:
+        """Delete one run together with its stage artifacts."""
+        self._execute_write(
+            "DELETE FROM deliberation_artifacts WHERE deliberation_id = ?",
+            (deliberation_id,),
+        )
+        return self._delete(
+            "DELETE FROM deliberation_runs WHERE deliberation_id = ?",
+            (deliberation_id,),
+        )
+

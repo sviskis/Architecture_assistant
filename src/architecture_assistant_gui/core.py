@@ -26,6 +26,12 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Optional
 
 from architecture_assistant.composition import (
+    ACTION_CANCEL,
+    ACTION_GENERATE_FINAL_SYNTHESIS,
+    ACTION_GENERATE_LEAD_REVIEW,
+    ACTION_GENERATE_PROPOSAL,
+    ACTION_RUN_ROUND1,
+    ACTION_RUN_ROUND2,
     ADVISOR_KEYS,
     EVENT_LEVEL_ERROR,
     EVENT_LEVEL_INFO,
@@ -194,6 +200,10 @@ class CoreWorker:
         #: a proposal can get its evidence from - and it never crosses to the Tk
         #: thread, which only ever receives plain dictionaries.
         self._last_review: Optional[Any] = None
+        #: The id of the deliberation currently in view (``""`` before one is
+        #: started). Stage actions act on **this** run only, and the id is a plain
+        #: string - the panel never holds a core object.
+        self._deliberation_id: str = ""
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -627,6 +637,132 @@ class CoreWorker:
             "action": "synthesize_proposal",
             "board": self.proposal_board(),
             "proposal": proposal.to_dict(),
+        }
+
+    # -- the architecture deliberation (Step 29) ---------------------------
+
+    def deliberation_board(self) -> dict[str, Any]:
+        """The deliberation history and the run currently in view - plain data.
+
+        The board never writes anything: it reads the durable deliberations and
+        reports them, so a restart can show what an earlier session ran. A
+        deliberation that completed in another session is visible here; only the
+        *last* run of **this** process is the one the stage buttons act on, and a
+        missing one is reported rather than invented.
+        """
+        composition = self._core()
+        engine = composition.architecture_deliberation
+        runs = engine.runs()
+        current = self._deliberation_id
+        snapshot = None
+        if current:
+            try:
+                snapshot = engine.snapshot(current).to_dict()
+            except Exception:  # noqa: BLE001 - a lost run is reported, not fatal
+                snapshot = None
+                self._deliberation_id = ""
+        return {
+            "current": snapshot,
+            "count": len(runs),
+            "runs": [run.to_dict() for run in reversed(runs)],
+        }
+
+    def start_deliberation(
+        self, requirement: str = "", *, actor: str, reason: str
+    ) -> dict[str, Any]:
+        """Start (or re-open) one deliberation and return its snapshot.
+
+        The requirement is the operator's own text, stored **verbatim**: the core
+        never rewrites it. Starting the same requirement twice is idempotent by
+        identity, so a double click cannot create two boards.
+        """
+        composition = self._core()
+        run = composition.architecture_deliberation.start(
+            requirement,
+            actor=actor,
+            reason=reason,
+            on_event=self.forward_event,
+        )
+        self._deliberation_id = run.deliberation_id
+        return {
+            "action": "start_deliberation",
+            "deliberation": composition.architecture_deliberation.snapshot(
+                run.deliberation_id
+            ).to_dict(),
+            "board": self.deliberation_board(),
+        }
+
+    def run_deliberation_stage(self, action: str, *, actor: str, reason: str) -> dict[str, Any]:
+        """Run exactly one stage of the deliberation in view - never a loop.
+
+        Each stage is one explicit operator action, and the use-case itself
+        refuses a stage the run is not at. There is deliberately no ``run all``
+        here: the two-round protocol is staged, not autonomous.
+        """
+        composition = self._core()
+        engine = composition.architecture_deliberation
+        deliberation_id = self._deliberation_id
+        if not deliberation_id:
+            raise CoreError(
+                "no deliberation is in view; start one with the requirement "
+                "before running a stage"
+            )
+        stages = {
+            ACTION_RUN_ROUND1: engine.run_round1,
+            ACTION_GENERATE_LEAD_REVIEW: engine.generate_lead_review,
+            ACTION_RUN_ROUND2: engine.run_round2,
+            ACTION_GENERATE_FINAL_SYNTHESIS: engine.generate_final_synthesis,
+        }
+        step = stages.get(action)
+        if step is not None:
+            run = step(
+                deliberation_id,
+                actor=actor,
+                reason=reason,
+                on_event=self.forward_event,
+            )
+        elif action == ACTION_CANCEL:
+            run = engine.cancel(
+                deliberation_id,
+                actor=actor,
+                reason=reason,
+                on_event=self.forward_event,
+            )
+        else:
+            raise CoreError(f"unknown deliberation action {action!r}")
+        return {
+            "action": action,
+            "deliberation": engine.snapshot(run.deliberation_id).to_dict(),
+            "board": self.deliberation_board(),
+        }
+
+    def generate_deliberation_proposal(
+        self, *, actor: str, reason: str, requirement: str = ""
+    ) -> dict[str, Any]:
+        """Turn the deliberation's final synthesis into one ``DRAFT`` proposal.
+
+        The proposal is linked to the **exact** synthesis identity and stays a
+        ``DRAFT``: only the human approval path can decide it.
+        """
+        composition = self._core()
+        engine = composition.architecture_deliberation
+        deliberation_id = self._deliberation_id
+        if not deliberation_id:
+            raise CoreError(
+                "no deliberation is in view; a proposal is generated from one "
+                "deliberation's final synthesis"
+            )
+        proposal = engine.generate_proposal(
+            deliberation_id,
+            actor=actor,
+            reason=reason,
+            on_event=self.forward_event,
+        )
+        return {
+            "action": "generate_deliberation_proposal",
+            "proposal": proposal.to_dict(),
+            "deliberation": engine.snapshot(deliberation_id).to_dict(),
+            "board": self.proposal_board(),
         }
 
     def approve_proposal(

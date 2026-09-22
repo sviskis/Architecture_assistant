@@ -76,6 +76,23 @@ from .disabled import (
     DisabledAdvisorError,
 )
 from .excel_reporting import SHEET_NAMES, ExcelReportingAdapter
+from .deliberation_lead import (
+    DEFAULT_DELIBERATION_MAX_OUTPUT_TOKENS,
+    DEFAULT_DELIBERATION_TEMPERATURE,
+    DELIBERATION_AGENT_ROLE,
+    DELIBERATION_LEAD_PROVIDERS,
+    DELIBERATION_LEAD_ROLE,
+    DeliberationAdapterError,
+    DeliberationAgentAdapter,
+    DeliberationHttpError,
+    DeliberationInvalidResponseError,
+    DeliberationLeadAdapter,
+    DeliberationMissingApiKeyError,
+    DeliberationRateLimitError,
+    DeliberationTransportError,
+    profile_for,
+    resolve_deliberation_model,
+)
 from .grok import (
     CHALLENGER_ROLE,
     DEFAULT_GROK_MAX_OUTPUT_TOKENS,
@@ -101,6 +118,8 @@ from .migrations import (
     BOOTSTRAP_SCHEMA_SQL,
     CHANGE_REQUEST_TABLE_NAME,
     COST_TABLE_NAME,
+    DELIBERATION_ARTIFACT_TABLE_NAME,
+    DELIBERATION_RUN_TABLE_NAME,
     MIGRATIONS,
     PROPOSAL_TABLE_NAME,
     SUPERVISION_TABLE_NAME,
@@ -196,6 +215,8 @@ __all__ = [
     "COST_TABLE_NAME",
     "PROPOSAL_TABLE_NAME",
     "SUPERVISION_TABLE_NAME",
+    "DELIBERATION_RUN_TABLE_NAME",
+    "DELIBERATION_ARTIFACT_TABLE_NAME",
     # adapters
     "SqliteStorage",
     "SqliteCostPlugin",
@@ -329,4 +350,20 @@ __all__ = [
     "OPENAI_JUDGE_FALLBACK_TARGET",
     "DEFAULT_JUDGE_MAX_OUTPUT_TOKENS",
     "resolve_openai_judge_model",
+    # the deliberation adapters (Step 29: one architect seat + one chair)
+    "DeliberationAgentAdapter",
+    "DeliberationLeadAdapter",
+    "DeliberationAdapterError",
+    "DeliberationMissingApiKeyError",
+    "DeliberationTransportError",
+    "DeliberationHttpError",
+    "DeliberationRateLimitError",
+    "DeliberationInvalidResponseError",
+    "DELIBERATION_AGENT_ROLE",
+    "DELIBERATION_LEAD_ROLE",
+    "DELIBERATION_LEAD_PROVIDERS",
+    "DEFAULT_DELIBERATION_MAX_OUTPUT_TOKENS",
+    "DEFAULT_DELIBERATION_TEMPERATURE",
+    "profile_for",
+    "resolve_deliberation_model",
 ]

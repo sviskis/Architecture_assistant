@@ -39,8 +39,13 @@ class AuditEntityType(StrEnum):
     **durable decisions only** (a directive approved, rejected, waived,
     escalated or actually sent; its ``entity_id`` is the supervision id) - a
     polling tick, a duplicate tick and a read-only status query are deliberately
-    never audited. Each was added deliberately when its writer landed - audit
-    entries are never written for an entity kind that does not exist here.
+    never audited. ``DELIBERATION`` is written by the Step 29 controlled
+    multi-agent architecture deliberation for the **lifecycle acts only**
+    (created, a round/review/synthesis completed, proposal generated, a run
+    cancelled); its ``entity_id`` is the deliberation id. A stage read, a GUI
+    refresh, a snapshot and a popup are deliberately never audited. Each was
+    added deliberately when its writer landed - audit entries are never written
+    for an entity kind that does not exist here.
     """
 
     ADR = "ADR"
@@ -51,6 +56,7 @@ class AuditEntityType(StrEnum):
     PLAN = "PLAN"
     PROPOSAL = "PROPOSAL"
     SUPERVISION = "SUPERVISION"
+    DELIBERATION = "DELIBERATION"
 
 
 class AuditAction(StrEnum):

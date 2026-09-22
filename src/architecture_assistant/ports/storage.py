@@ -18,6 +18,7 @@ from .repositories import (
     ArchitectureVersionRepository,
     AuditRepository,
     DecisionRepository,
+    DeliberationRepository,
     FindingRepository,
     ProjectRepository,
     RiskRepository,
@@ -33,11 +34,11 @@ __all__ = ["StoragePort"]
 class StoragePort(TransactionPort, Protocol):
     """Typed facade over the source of truth.
 
-    Pure aggregation: twelve typed accessors plus the reused transaction
+    Pure aggregation: thirteen typed accessors plus the reused transaction
     boundary. Because it inherits :class:`TransactionPort` there is exactly
     **one** transaction contract in the codebase - the facade never introduces
     competing transaction semantics. Conformance is checkable at runtime and
-    requires precisely the twelve accessors plus ``transaction``.
+    requires precisely the thirteen accessors plus ``transaction``.
 
     It must stay a thin composition boundary and never grow behaviour.
     """
@@ -59,6 +60,9 @@ class StoragePort(TransactionPort, Protocol):
 
     @property
     def proposals(self) -> ArchitectureProposalRepository: ...
+
+    @property
+    def deliberations(self) -> DeliberationRepository: ...
 
     @property
     def supervisions(self) -> SupervisionRepository: ...

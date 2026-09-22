@@ -42,7 +42,12 @@ from typing import Any
 
 __all__ = [
     "ADVISOR_KEYS",
+    "LEAD_KEY",
+    "DELIBERATION_AGENT_KEYS",
+    "SETTINGS_KEYS",
     "DEFAULT_PROVIDER_BY_ADVISOR",
+    "DEFAULT_LEAD_PROVIDER",
+    "DEFAULT_DELIBERATION_PROVIDER_BY_SEAT",
     "DEFAULT_PROVIDER_SETTINGS_PATH",
     "MASKED_KEY",
     "PROVIDER_LABELS",
@@ -73,6 +78,29 @@ DEFAULT_PROVIDER_SETTINGS_PATH: Path = Path("data") / PROVIDER_SETTINGS_FILENAME
 #: point of this module.
 ADVISOR_KEYS: tuple[str, ...] = ("advisor_1", "advisor_2", "advisor_3")
 
+#: The **lead** slot of a deliberation (Step 29). It is a fourth, independently
+#: configured seat - the chair of the review board - and it is deliberately *not*
+#: one of the advisor slots: a deliberating architect answers with a whole
+#: proposal, while the chair reviews two of them and synthesizes the result. It
+#: shares this file (and the credential mechanism) with the advisors so the
+#: operator configures one thing in one place.
+LEAD_KEY = "lead"
+
+#: The two **architect** slots of a deliberation. They are their own slots rather
+#: than a reuse of the advisor trio: a deliberation seat answers with a whole
+#: proposal under the two-round protocol, while an advisor answers one question
+#: with one ``Finding``. Reusing a slot would silently couple the two workflows -
+#: changing a Quick Review advisor would change a deliberating architect.
+DELIBERATION_AGENT_KEYS: tuple[str, ...] = ("agent_a", "agent_b")
+
+#: Every slot this file knows, in the order a panel shows them. ``ADVISOR_KEYS``
+#: alone still drives advisor assembly - no deliberation seat joins the trio.
+SETTINGS_KEYS: tuple[str, ...] = (
+    *ADVISOR_KEYS,
+    *DELIBERATION_AGENT_KEYS,
+    LEAD_KEY,
+)
+
 #: Every provider the configuration accepts. ``disabled`` is a real choice - "run
 #: this slot without any provider" - and not a placeholder for a missing one.
 SUPPORTED_PROVIDERS: tuple[str, ...] = (
@@ -99,6 +127,20 @@ DEFAULT_PROVIDER_BY_ADVISOR: dict[str, str] = {
     "advisor_1": "openai",
     "advisor_2": "claude",
     "advisor_3": "grok",
+}
+
+#: The default **lead** provider. It is a configuration default, not a rule: the
+#: chair is independently configurable and the operator may replace it with any
+#: supported provider (or disable it, which makes the lead stages fail closed
+#: without a call).
+DEFAULT_LEAD_PROVIDER = "openai"
+
+#: The default provider of each deliberation seat. Configuration defaults, not
+#: rules - and deliberately distinct, so the shipped board is two different
+#: providers answering the same requirement.
+DEFAULT_DELIBERATION_PROVIDER_BY_SEAT: dict[str, str] = {
+    "agent_a": "deepseek",
+    "agent_b": "claude",
 }
 
 #: The three load outcomes the panel can report.
@@ -188,25 +230,28 @@ class ProviderSelection:
 
 @dataclass(frozen=True)
 class ProviderSettings:
-    """One :class:`ProviderSelection` per advisor slot, in the panel's order."""
+    """One :class:`ProviderSelection` per advisor slot, plus the lead slot."""
 
     advisor_1: ProviderSelection = ProviderSelection("openai")
     advisor_2: ProviderSelection = ProviderSelection("claude")
     advisor_3: ProviderSelection = ProviderSelection("grok")
+    agent_a: ProviderSelection = ProviderSelection("deepseek")
+    agent_b: ProviderSelection = ProviderSelection("claude")
+    lead: ProviderSelection = ProviderSelection("openai")
 
     def __repr__(self) -> str:
         """Redacted through the selections, which never render a key."""
         return (
             "ProviderSettings("
-            + ", ".join(f"{key}={getattr(self, key)!r}" for key in ADVISOR_KEYS)
+            + ", ".join(f"{key}={getattr(self, key)!r}" for key in SETTINGS_KEYS)
             + ")"
         )
 
     __str__ = __repr__
 
     def selection(self, key: str) -> ProviderSelection:
-        """The selection of one advisor slot, or ``KeyError`` for a bad slot."""
-        if key not in ADVISOR_KEYS:
+        """The selection of one slot, or ``KeyError`` for a bad slot."""
+        if key not in SETTINGS_KEYS:
             raise KeyError(key)
         return getattr(self, key)
 
@@ -214,24 +259,24 @@ class ProviderSettings:
         self, key: str, selection: ProviderSelection
     ) -> "ProviderSettings":
         """A copy with one slot replaced - the value objects stay immutable."""
-        if key not in ADVISOR_KEYS:
+        if key not in SETTINGS_KEYS:
             raise KeyError(key)
         if not isinstance(selection, ProviderSelection):
             raise ValueError("selection must be a ProviderSelection")
         return ProviderSettings(
             **{
                 slot: selection if slot == key else getattr(self, slot)
-                for slot in ADVISOR_KEYS
+                for slot in SETTINGS_KEYS
             }
         )
 
     def to_file_dict(self) -> dict[str, dict[str, str]]:
         """The full record - secrets included - for the settings file only."""
-        return {key: getattr(self, key).to_file_dict() for key in ADVISOR_KEYS}
+        return {key: getattr(self, key).to_file_dict() for key in SETTINGS_KEYS}
 
     def to_view(self) -> dict[str, dict[str, Any]]:
         """The key-free view of every slot, for the panel and the core payload."""
-        return {key: getattr(self, key).to_view() for key in ADVISOR_KEYS}
+        return {key: getattr(self, key).to_view() for key in SETTINGS_KEYS}
 
 
 @dataclass(frozen=True)
@@ -259,12 +304,15 @@ class ProviderSettingsLoad:
 
 
 def default_provider_settings() -> ProviderSettings:
-    """The documented defaults: OpenAI, Claude, Grok - the established wiring."""
+    """The documented defaults: OpenAI/Claude/Grok advisors, DeepSeek/Claude seats, an OpenAI lead."""
     return ProviderSettings(
         **{
             key: ProviderSelection(provider)
             for key, provider in DEFAULT_PROVIDER_BY_ADVISOR.items()
-        }
+        },
+        agent_a=ProviderSelection(DEFAULT_DELIBERATION_PROVIDER_BY_SEAT["agent_a"]),
+        agent_b=ProviderSelection(DEFAULT_DELIBERATION_PROVIDER_BY_SEAT["agent_b"]),
+        lead=ProviderSelection(DEFAULT_LEAD_PROVIDER),
     )
 
 
@@ -300,22 +348,22 @@ def settings_from_mapping(mapping: Any) -> ProviderSettings:
     """
     if not isinstance(mapping, Mapping):
         raise ValueError("provider settings must be a JSON object")
-    unknown = [key for key in mapping if key not in ADVISOR_KEYS]
+    unknown = [key for key in mapping if key not in SETTINGS_KEYS]
     if unknown:
         raise ValueError(
             "provider settings may only name "
-            f"{', '.join(ADVISOR_KEYS)}; got {len(unknown)} unknown entry(ies)"
+            f"{', '.join(SETTINGS_KEYS)}; got {len(unknown)} unknown entry(ies)"
         )
     selections = {
         key: _selection_from_mapping(mapping[key])
-        for key in ADVISOR_KEYS
+        for key in SETTINGS_KEYS
         if key in mapping
     }
     defaults = default_provider_settings()
     return ProviderSettings(
         **{
             key: selections.get(key, defaults.selection(key))
-            for key in ADVISOR_KEYS
+            for key in SETTINGS_KEYS
         }
     )
 

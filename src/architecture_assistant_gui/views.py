@@ -161,6 +161,17 @@ ADVISOR_SPLIT_MIN_SIZE = 180
 SUPERVISOR_SPLIT_MIN_SIZE = 160
 PROPOSAL_SPLIT_MIN_SIZE = 130
 
+#: The deliberation workbench (Step 29). The chair's pane is the centre and the
+#: widest of the three, because the review packet, the progress checklist, the
+#: compact counts and every stage control live there; the two architects flank it.
+DELIBERATION_SPLIT_MIN_SIZE = 180
+DELIBERATION_PANE_MIN_SIZE = 150
+
+#: Where the deliberation splitter starts: 27% | 46% | 27%, so the chair owns the
+#: middle and the two architects get equal, narrower panes. It is a start, not a
+#: rule - the operator drags it and the position is remembered like every other.
+DELIBERATION_PANE_FRACTIONS: tuple[float, float] = (0.27, 0.73)
+
 #: Where the main splitter starts: the top area is given its natural height, but
 #: never more than this share of the window, so the notebook (the tab content)
 #: always owns most of it and a window resize grows the notebook more.
@@ -181,6 +192,7 @@ SPLIT_KEYS: tuple[str, ...] = (
     "review_judge",
     "supervisor",
     "proposal",
+    "deliberation",
 )
 
 #: The four compact rows one advisor pane keeps. Everything else about the
@@ -318,6 +330,12 @@ class MainWindow:
         self._proposal_split: Any = None
         self._supervisor_split: Any = None
         self._supervisor_frames: dict[str, Any] = {}
+        #: The deliberation workbench (Step 29): its own horizontal splitter, the
+        #: three panes (Agent A | Lead | Agent B) and the stage buttons. Empty
+        #: until the tab is built and filled by every render.
+        self._deliberation_split: Any = None
+        self._deliberation_panes: dict[str, Any] = {}
+        self._deliberation_buttons: dict[str, Any] = {}
         #: The splitters whose starting sash positions have already been placed.
         self._placed_splits: set[str] = set()
         #: The splitters the operator has dragged by hand in this session. A
@@ -608,6 +626,7 @@ class MainWindow:
         notebook.add(monitor, text="Monitor")
 
         self._build_review_tab(notebook)
+        self._build_deliberation_tab(notebook)
         self._build_proposal_tab(notebook)
         self._build_supervisor_tab(notebook)
         # Logs, Audit, Risks and Reports are **popups** now: they are things the
@@ -987,6 +1006,120 @@ class MainWindow:
     def question_value(self) -> str:
         """The question exactly as the operator typed it (never rewritten)."""
         return "" if self._question is None else self._question.get()
+
+    def _build_deliberation_tab(self, notebook: Any) -> None:
+        """The Deliberation workbench: Agent A | Lead Agent | Agent B.
+
+        The centre pane is the **chair**: the deliberation id, the stage, the
+        six-stage progress checklist, the compact counts (agreements, conflicts,
+        open questions, risks) and the stage controls. The two side panes are the
+        two independent architects. Every stage button is offered only when the
+        run is actually at that stage - the controller computes the valid set, so
+        this tab never has to invent an enabled/disabled rule.
+
+        Nothing here reads a repository, a provider or the database: the tab
+        renders one plain payload and reports which action the operator pressed.
+        """
+        frame = ttk.Frame(notebook, padding=6)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(2, weight=1)
+
+        ttk.Label(frame, textvariable=self._var("deliberation_status"), wraplength=980,
+                  justify="left").grid(row=0, column=0, sticky="ew")
+        ttk.Label(frame, textvariable=self._var("deliberation_requirement"),
+                  wraplength=980, justify="left").grid(row=1, column=0, sticky="ew")
+
+        panes = ttk.PanedWindow(frame, orient="horizontal")
+        panes.grid(row=2, column=0, sticky="nsew", pady=(4, 0))
+        self._deliberation_split = panes
+
+        self._deliberation_panes: dict[str, Any] = {}
+        for slot, title in (
+            ("agent_a", "Agent A"),
+            ("lead", "Lead Agent"),
+            ("agent_b", "Agent B"),
+        ):
+            pane = ttk.LabelFrame(panes, text=title, padding=(6, 4))
+            pane.columnconfigure(0, weight=1)
+            pane.rowconfigure(1, weight=1)
+            ttk.Label(pane, textvariable=self._var(f"deliberation_{slot}_summary"),
+                      wraplength=320, justify="left").grid(
+                row=0, column=0, sticky="ew"
+            )
+            table = ttk.Treeview(
+                pane, columns=("field", "value"), show="headings", height=10
+            )
+            table.heading("field", text="Field")
+            table.heading("value", text="Value")
+            table.column("field", width=110, anchor="w")
+            table.column("value", width=190, anchor="w")
+            scroll = ttk.Scrollbar(pane, orient="vertical", command=table.yview)
+            table.configure(yscrollcommand=scroll.set)
+            table.grid(row=1, column=0, sticky="nsew")
+            scroll.grid(row=1, column=1, sticky="ns")
+            _add_pane(panes, pane, DELIBERATION_PANE_MIN_SIZE, weight=1)
+            self._deliberation_panes[slot] = {"frame": pane, "rows": table}
+
+        # The controls live under the centre pane, so they are always beside the
+        # review they act on.
+        controls = ttk.Frame(self._deliberation_panes["lead"]["frame"])
+        controls.grid(row=2, column=0, sticky="ew", pady=(4, 0))
+        self._deliberation_buttons: dict[str, Any] = {}
+        for index, key in enumerate(
+            (
+                "deliberation_round1",
+                "deliberation_lead_review",
+                "deliberation_round2",
+                "deliberation_synthesis",
+                "deliberation_proposal",
+                "deliberation_cancel",
+            )
+        ):
+            button = ttk.Button(
+                controls,
+                text=key.replace("deliberation_", "").replace("_", " ").title(),
+                command=lambda name=key: self._on_action(name),
+            )
+            button.grid(row=0, column=index % 3, sticky="ew", padx=(0, 4), pady=2)
+            self._deliberation_buttons[key] = button
+
+        ttk.Label(
+            frame,
+            textvariable=self._var("deliberation_cost"),
+            wraplength=980,
+            justify="left",
+        ).grid(row=3, column=0, sticky="ew", pady=(4, 0))
+        notebook.add(frame, text="Deliberation")
+
+    def _render_deliberation(self, view: Mapping[str, Any]) -> None:
+        """Render one deliberation payload: plain data in, widgets out."""
+        if not self._deliberation_panes:
+            return
+        self._var("deliberation_status").set(str(view.get("status", "")))
+        self._var("deliberation_requirement").set(
+            str(view.get("requirement", ""))
+        )
+        self._var("deliberation_cost").set(str(view.get("cost", "")))
+        for slot in ("agent_a", "lead", "agent_b"):
+            pane = self._deliberation_panes.get(slot)
+            if pane is None:
+                continue
+            rows = pane["rows"]
+            for item in rows.get_children():
+                rows.delete(item)
+            for row in tuple(view.get(f"{slot}_rows") or ()):
+                values = tuple(row)
+                rows.insert("", "end", values=values[:2])
+            self._var(f"deliberation_{slot}_summary").set(
+                str(view.get(f"{slot}_summary", ""))
+            )
+        enabled = {
+            key: bool(value)
+            for key, value in (view.get("buttons") or {}).items()
+        }
+        for key, button in self._deliberation_buttons.items():
+            allowed = enabled.get(key, False)
+            button.state(["!disabled"] if allowed else ["disabled"])
 
     def _build_proposal_tab(self, notebook: Any) -> None:
         """The Architecture Proposal tab: the *managed project's* design.
@@ -1597,6 +1730,7 @@ class MainWindow:
             "review_bottom": self._review_bottom_split,
             "supervisor": self._supervisor_split,
             "proposal": self._proposal_split,
+            "deliberation": self._deliberation_split,
         }
         for key, split in zip(
             ("review_merged", "review_judge"), self._review_section_splits
@@ -1984,6 +2118,7 @@ class MainWindow:
                 self._question.insert(0, question)
 
         supervisor = view.get("supervisor") or {}
+        self._render_deliberation(view.get("deliberation") or {})
         self._var("supervisor_status").set(str(supervisor.get("status", "")))
         self._fill(
             self._supervisor_header,

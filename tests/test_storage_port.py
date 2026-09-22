@@ -72,6 +72,9 @@ ACCESSORS = (
     "audit",
     "proposals",
     "supervisions",
+    # Step 29 added the deliberation lifecycle (one run row plus one addressable
+    # row per stage result), so the facade carries one more accessor.
+    "deliberations",
 )
 
 

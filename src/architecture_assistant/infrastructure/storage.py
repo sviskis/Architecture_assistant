@@ -17,6 +17,7 @@ from ..ports.repositories import (
     ArchitectureVersionRepository,
     AuditRepository,
     DecisionRepository,
+    DeliberationRepository,
     FindingRepository,
     ProjectRepository,
     RiskRepository,
@@ -31,6 +32,7 @@ from .repositories import (
     SqliteArchitectureVersionRepository,
     SqliteAuditRepository,
     SqliteDecisionRepository,
+    SqliteDeliberationRepository,
     SqliteFindingRepository,
     SqliteProjectRepository,
     SqliteRiskRepository,
@@ -62,6 +64,7 @@ class SqliteStorage:
             connection
         )
         self._proposals = SqliteArchitectureProposalRepository(connection)
+        self._deliberations = SqliteDeliberationRepository(connection)
         self._supervisions = SqliteSupervisionRepository(connection)
         self._adrs = SqliteADRRepository(connection)
         self._risks = SqliteRiskRepository(connection)
@@ -105,6 +108,10 @@ class SqliteStorage:
     @property
     def proposals(self) -> ArchitectureProposalRepository:
         return self._proposals
+
+    @property
+    def deliberations(self) -> DeliberationRepository:
+        return self._deliberations
 
     @property
     def supervisions(self) -> SupervisionRepository:

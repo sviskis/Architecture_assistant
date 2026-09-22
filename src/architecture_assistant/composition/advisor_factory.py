@@ -40,7 +40,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Callable, Mapping, Optional
 
-from ..application import AdvisorReviewer
+from ..application import AdvisorReviewer, DeliberationChair, DeliberationSeat
 from ..domain.models import utc_now
 from ..infrastructure import (
     DEFAULT_CLAUDE_MODEL,
@@ -49,13 +49,23 @@ from ..infrastructure import (
     DEFAULT_OPENAI_MODEL,
     ClaudeAdvisorAdapter,
     DeepSeekAdvisorAdapter,
+    DeliberationAgentAdapter,
+    DeliberationLeadAdapter,
     DisabledAdvisorAdapter,
     GrokAdvisorAdapter,
     OpenAIAdvisorAdapter,
 )
-from ..ports.capabilities import AdvisorPort, ConnectionStatus, CostPort
+from ..ports.capabilities import (
+    SLOT_AGENT_A,
+    SLOT_AGENT_B,
+    AdvisorPort,
+    ConnectionStatus,
+    CostPort,
+)
 from .provider_settings import (
     ADVISOR_KEYS,
+    DELIBERATION_AGENT_KEYS,
+    LEAD_KEY,
     PROVIDER_LABELS,
     SUPPORTED_PROVIDERS,
     ProviderSettings,
@@ -69,6 +79,10 @@ __all__ = [
     "default_model_for",
     "probe_connection",
     "provider_catalog",
+    "create_deliberation_agent",
+    "create_deliberation_lead",
+    "assemble_deliberation",
+    "probe_deliberation",
 ]
 
 #: Each provider's documented default model - the same constants the adapters
@@ -264,3 +278,141 @@ def probe_connection(
         return ConnectionStatus(verdict).value
     except ValueError:
         return ConnectionStatus.PROVIDER_ERROR.value
+
+
+# ---------------------------------------------------------------------------
+# the deliberation seats (Step 29)
+# ---------------------------------------------------------------------------
+
+def create_deliberation_agent(
+    provider: str,
+    model: str = "",
+    credential: Optional[str] = None,
+    *,
+    project: Optional[str] = None,
+    cost_sink: Optional[CostPort] = None,
+    clock: Callable[[], datetime] = utc_now,
+    transport: Optional[Callable[[Any], Any]] = None,
+) -> Optional[DeliberationAgentAdapter]:
+    """One architect adapter, or ``None`` for the **disabled** seat.
+
+    ``None`` is the whole disabled contract: the use-case abstains and makes **no
+    call at all**, so a disabled seat cannot even reach a transport.
+    """
+    if str(provider).strip().casefold() == "disabled":
+        return None
+    return DeliberationAgentAdapter(
+        provider,
+        model,
+        credential,
+        project=project,
+        cost_sink=cost_sink,
+        clock=clock,
+        transport=transport,
+    )
+
+
+def create_deliberation_lead(
+    provider: str,
+    model: str = "",
+    credential: Optional[str] = None,
+    *,
+    project: Optional[str] = None,
+    cost_sink: Optional[CostPort] = None,
+    clock: Callable[[], datetime] = utc_now,
+    transport: Optional[Callable[[Any], Any]] = None,
+) -> Optional[DeliberationLeadAdapter]:
+    """The chair adapter, or ``None`` when no lead provider is configured."""
+    if str(provider).strip().casefold() == "disabled":
+        return None
+    return DeliberationLeadAdapter(
+        provider,
+        model,
+        credential,
+        project=project,
+        cost_sink=cost_sink,
+        clock=clock,
+        transport=transport,
+    )
+
+
+def assemble_deliberation(
+    settings: ProviderSettings,
+    *,
+    project: Optional[str] = None,
+    cost_sink: Optional[CostPort] = None,
+    clock: Callable[[], datetime] = utc_now,
+    transport: Optional[Callable[[Any], Any]] = None,
+) -> tuple[DeliberationSeat, DeliberationSeat, DeliberationChair]:
+    """The two architect seats and the chair, built from one configuration.
+
+    This is the single place that knows how the ``agent_a``, ``agent_b`` and
+    ``lead`` slots map onto adapters, so the review machinery never learns a
+    provider - and changing a provider is a configuration change, not a code
+    change.
+    """
+    if not isinstance(settings, ProviderSettings):
+        raise ValueError("settings must be a ProviderSettings")
+    built: dict[str, DeliberationSeat] = {}
+    for key, slot in zip(DELIBERATION_AGENT_KEYS, (SLOT_AGENT_A, SLOT_AGENT_B)):
+        selection: ProviderSelection = settings.selection(key)
+        built[slot] = DeliberationSeat(
+            slot=slot,
+            provider=selection.provider,
+            model=selection.model,
+            agent=create_deliberation_agent(
+                selection.provider,
+                selection.model,
+                selection.api_key,
+                project=project,
+                cost_sink=cost_sink,
+                clock=clock,
+                transport=transport,
+            ),
+        )
+    chair_selection: ProviderSelection = settings.selection(LEAD_KEY)
+    chair = DeliberationChair(
+        provider=chair_selection.provider,
+        model=chair_selection.model,
+        lead=create_deliberation_lead(
+            chair_selection.provider,
+            chair_selection.model,
+            chair_selection.api_key,
+            project=project,
+            cost_sink=cost_sink,
+            clock=clock,
+            transport=transport,
+        ),
+    )
+    return built[SLOT_AGENT_A], built[SLOT_AGENT_B], chair
+
+
+def probe_deliberation(
+    provider: str,
+    model: str = "",
+    credential: Optional[str] = None,
+    *,
+    transport: Optional[Callable[[Any], Any]] = None,
+) -> str:
+    """One Test Connection verdict for a deliberation seat - never an exception.
+
+    It is deliberately the same verdict vocabulary the advisor probe uses; a
+    disabled slot answers ``DISABLED`` without any call, because "run this seat
+    without a provider" is a valid configuration and not a failure.
+    """
+    if str(provider).strip().casefold() == "disabled":
+        return ConnectionStatus.DISABLED.value
+    try:
+        adapter = create_deliberation_lead(
+            provider, model, credential, transport=transport
+        )
+        if adapter is None:  # pragma: no cover - disabled handled above
+            return ConnectionStatus.DISABLED.value
+        verdict = adapter._test_connection()
+    except Exception:  # noqa: BLE001 - a probe reports a verdict, it never raises
+        return ConnectionStatus.PROVIDER_ERROR.value
+    try:
+        return ConnectionStatus(verdict).value
+    except ValueError:
+        return ConnectionStatus.PROVIDER_ERROR.value
+

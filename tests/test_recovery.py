@@ -749,11 +749,13 @@ class TestSourceTreeUntouched:
         # contract and the managed-project proposal pair, Step 28 the advisory
         # supervision quartet (the deterministic send policy, the supervision
         # use-case with its fail-closed gate, the headless tick-driven runtime
-        # and the offline scripted supervisor), and the provider-settings step
+        # and the offline scripted supervisor), the provider-settings step
         # exactly four - the per-advisor provider configuration, the
         # composition-level advisor factory, the DeepSeek advisor adapter and the
-        # disabled advisor. Nothing else has entered the scanned tree.
-        assert len(modules) == 69
+        # disabled advisor - and Step 29 exactly two: the controlled architecture
+        # deliberation and the provider-backed architect/chair adapters. Nothing
+        # else has entered the scanned tree.
+        assert len(modules) == 71
 
     def test_the_crash_driver_is_not_an_architecture_module(self) -> None:
         assert CHILD.parent.name == "tests"

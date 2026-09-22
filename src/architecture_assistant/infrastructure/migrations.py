@@ -31,6 +31,8 @@ __all__ = [
     "COST_TABLE_NAME",
     "PROPOSAL_TABLE_NAME",
     "SUPERVISION_TABLE_NAME",
+    "DELIBERATION_RUN_TABLE_NAME",
+    "DELIBERATION_ARTIFACT_TABLE_NAME",
 ]
 
 
@@ -202,6 +204,11 @@ PROPOSAL_TABLE_NAME = "architecture_proposals"
 #: Table created by migration v6 (advisory supervision records).
 SUPERVISION_TABLE_NAME = "supervision_records"
 
+#: Tables created by migration v7 (a controlled architecture deliberation: one
+#: row per run plus one addressable row per stage result).
+DELIBERATION_RUN_TABLE_NAME = "deliberation_runs"
+DELIBERATION_ARTIFACT_TABLE_NAME = "deliberation_artifacts"
+
 #: All source-of-truth tables created by the migrations (excluding the
 #: ``schema_migrations`` bookkeeping table).
 TABLE_NAMES: tuple[str, ...] = (
@@ -212,6 +219,8 @@ TABLE_NAMES: tuple[str, ...] = (
         COST_TABLE_NAME,
         PROPOSAL_TABLE_NAME,
         SUPERVISION_TABLE_NAME,
+        DELIBERATION_RUN_TABLE_NAME,
+        DELIBERATION_ARTIFACT_TABLE_NAME,
     )
 )
 
@@ -476,6 +485,90 @@ def _migration_006_down(conn: sqlite3.Connection) -> None:
     conn.execute(f"DROP TABLE IF EXISTS {SUPERVISION_TABLE_NAME}")
 
 
+#: A controlled architecture deliberation (Step 29) is persisted as **two**
+#: tables, never as one opaque document. ``deliberation_runs`` is the identity
+#: and lifecycle (one operator requirement, the three configured seats, the
+#: status, the fingerprint over the material inputs, the revision lineage), and
+#: ``deliberation_artifacts`` holds one addressable row per stage result.
+#:
+#: Why the split: the lifecycle must stay queryable ("which runs are ready for a
+#: proposal?"), a stage must be individually addressable ("what exactly did
+#: Agent A answer in Round 1, and what did it cost?") and a restart must find the
+#: completed stages instead of re-calling the providers. A single JSON blob would
+#: hide all three. The complex structured *content* of a stage still lives in
+#: that artifact's own ``content`` JSON column - that is a bounded payload, not
+#: the lifecycle.
+#:
+#: No foreign key is declared, for the same reason the other migrations state:
+#: no speculative relations between aggregates, and a run may legitimately be
+#: recorded before any artifact exists. The indexes are the query patterns the
+#: deliberation code and the panel actually use.
+_MIGRATION_007_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE deliberation_runs (
+        deliberation_id TEXT PRIMARY KEY,
+        project TEXT NOT NULL,
+        requirement TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        context_fingerprint TEXT NOT NULL,
+        agent_a_provider TEXT NOT NULL,
+        agent_a_model TEXT NOT NULL,
+        agent_b_provider TEXT NOT NULL,
+        agent_b_model TEXT NOT NULL,
+        lead_provider TEXT NOT NULL,
+        lead_model TEXT NOT NULL,
+        status TEXT NOT NULL,
+        max_review_rounds INTEGER NOT NULL DEFAULT 1,
+        revision_no INTEGER NOT NULL DEFAULT 1,
+        revision_of_deliberation_id TEXT,
+        error_reason TEXT NOT NULL DEFAULT '',
+        stale_reason TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE INDEX idx_deliberation_runs_status
+        ON deliberation_runs (status, created_at, deliberation_id)
+    """,
+    """
+    CREATE INDEX idx_deliberation_runs_project
+        ON deliberation_runs (project, created_at, deliberation_id)
+    """,
+    """
+    CREATE TABLE deliberation_artifacts (
+        artifact_id TEXT PRIMARY KEY,
+        deliberation_id TEXT NOT NULL,
+        stage TEXT NOT NULL,
+        slot TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL,
+        content TEXT NOT NULL DEFAULT '{}',
+        fingerprint TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE INDEX idx_deliberation_artifacts_run
+        ON deliberation_artifacts (deliberation_id, stage, slot, artifact_id)
+    """,
+)
+
+
+def _migration_007_deliberations(conn: sqlite3.Connection) -> None:
+    """Create the deliberation run and stage-artifact tables."""
+    for statement in _MIGRATION_007_STATEMENTS:
+        conn.execute(statement)
+
+
+def _migration_007_down(conn: sqlite3.Connection) -> None:
+    """Drop the deliberation tables."""
+    conn.execute("DROP INDEX IF EXISTS idx_deliberation_artifacts_run")
+    conn.execute(f"DROP TABLE IF EXISTS {DELIBERATION_ARTIFACT_TABLE_NAME}")
+    conn.execute("DROP INDEX IF EXISTS idx_deliberation_runs_project")
+    conn.execute("DROP INDEX IF EXISTS idx_deliberation_runs_status")
+    conn.execute(f"DROP TABLE IF EXISTS {DELIBERATION_RUN_TABLE_NAME}")
+
+
 #: Ordered migration list. Versions must be unique and strictly increasing.
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(
@@ -513,5 +606,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         name="supervision_records",
         up=_migration_006_supervision_records,
         down=_migration_006_down,
+    ),
+    Migration(
+        version=7,
+        name="architecture_deliberations",
+        up=_migration_007_deliberations,
+        down=_migration_007_down,
     ),
 )

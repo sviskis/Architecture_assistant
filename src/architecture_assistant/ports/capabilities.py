@@ -53,6 +53,21 @@ __all__ = [
     "SynthesisQuery",
     "SynthesisResult",
     "SynthesisPort",
+    "MAX_DELIBERATION_ITEMS",
+    "MAX_DELIBERATION_TEXT",
+    "SLOT_AGENT_A",
+    "SLOT_AGENT_B",
+    "SLOT_LEAD",
+    "AgentAnalysisQuery",
+    "AgentReconsiderQuery",
+    "AgentAnalysisResult",
+    "AgentReconsiderResult",
+    "DeliberationAgentPort",
+    "LeadReviewQuery",
+    "LeadReviewResult",
+    "LeadSynthesisQuery",
+    "FinalSynthesisResult",
+    "DeliberationLeadPort",
     "MAX_SUPERVISOR_ITEMS",
     "MAX_SUPERVISOR_TEXT",
     "SupervisorContext",
@@ -1330,3 +1345,363 @@ class SupervisionGatePort(Protocol):
     def enabled(self) -> bool: ...
 
     def resolve(self, step_no: int, attempt: int) -> SupervisionVerdict: ...
+
+
+# ---------------------------------------------------------------------------
+# the deliberation capability (Step 29)
+#
+# A controlled architecture review board: two *independent* architects answer the
+# operator's requirement, a chair reviews them, each architect gets exactly one
+# bounded reconsideration, and the chair produces a final synthesis. These
+# contracts are deliberately **separate** from ``AdvisorPort`` (a Finding cannot
+# represent a whole architecture proposal), from ``SynthesisPort`` (which returns
+# managed-project proposal content and nothing about agreements or conflicts),
+# from ``JudgePort`` (a judge resolves one evidence conflict, never a design) and
+# from ``SupervisorPort`` (the implementation supervisor is a different system
+# entirely - the Lead is never Codex).
+#
+# Two round contracts, not one, are the structural guarantee of independence: a
+# Round-1 request has *no field* that could carry the peer's proposal, and only a
+# Round-2 request can carry the Lead's critique and the peer's structured claims.
+# ---------------------------------------------------------------------------
+
+#: How many entries one deliberation section may carry, and how long one
+#: deliberation-facing text may be. A deliberation is a *bounded* consultation: an
+#: architect is never handed an unbounded transcript, a file dump or a chat log.
+MAX_DELIBERATION_ITEMS = 64
+MAX_DELIBERATION_TEXT = 4000
+
+#: The three seats of a deliberation. Slots are *positions*, never providers.
+SLOT_AGENT_A = "agent_a"
+SLOT_AGENT_B = "agent_b"
+SLOT_LEAD = "lead"
+
+
+def _bounded_deliberation(value: Any, field_name: str) -> dict:
+    """A JSON-safe mapping, bounded so no provider can flood a stage result."""
+    payload = _mapping(value, field_name)
+    if len(payload) > MAX_DELIBERATION_ITEMS:
+        raise ValueError(
+            f"{field_name} must carry at most {MAX_DELIBERATION_ITEMS} keys; "
+            f"got {len(payload)}"
+        )
+    return payload
+
+
+@dataclass(frozen=True)
+class AgentAnalysisQuery:
+    """Round 1: the **independent** analysis request.
+
+    An agent receives the operator's requirement verbatim and the same bounded
+    project context every other seat receives - and nothing else. There is no
+    field here that could carry a peer's proposal, which is what makes Round-1
+    independence structural rather than a convention.
+    """
+
+    project: str
+    requirement: str
+    deliberation_id: str
+    slot: str
+    context: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for name in ("project", "requirement", "deliberation_id", "slot"):
+            object.__setattr__(
+                self, name, _text(getattr(self, name), name)
+            )
+        object.__setattr__(
+            self, "context", _bounded_deliberation(self.context, "context")
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Deterministic, JSON-safe representation."""
+        return {
+            "project": self.project,
+            "requirement": self.requirement,
+            "deliberation_id": self.deliberation_id,
+            "slot": self.slot,
+            "context": dict(self.context),
+        }
+
+
+@dataclass(frozen=True)
+class AgentReconsiderQuery:
+    """Round 2: one bounded reconsideration of an agent's **own** Round 1.
+
+    It carries the agent's own Round-1 result, the Lead's structured critique for
+    that seat and the peer's **structured claims** - never a transcript, never a
+    hidden reasoning trace and never the peer's raw provider answer.
+    """
+
+    project: str
+    requirement: str
+    deliberation_id: str
+    slot: str
+    own_round1: Mapping[str, Any] = field(default_factory=dict)
+    lead_critique: Mapping[str, Any] = field(default_factory=dict)
+    peer_claims: Mapping[str, Any] = field(default_factory=dict)
+    context: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for name in ("project", "requirement", "deliberation_id", "slot"):
+            object.__setattr__(
+                self, name, _text(getattr(self, name), name)
+            )
+        for name in ("own_round1", "lead_critique", "peer_claims", "context"):
+            object.__setattr__(
+                self, name, _bounded_deliberation(getattr(self, name), name)
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Deterministic, JSON-safe representation."""
+        return {
+            "project": self.project,
+            "requirement": self.requirement,
+            "deliberation_id": self.deliberation_id,
+            "slot": self.slot,
+            "own_round1": dict(self.own_round1),
+            "lead_critique": dict(self.lead_critique),
+            "peer_claims": dict(self.peer_claims),
+            "context": dict(self.context),
+        }
+
+
+@dataclass(frozen=True)
+class AgentAnalysisResult:
+    """What an architect answers in Round 1: structured content plus provenance.
+
+    ``content`` is validated by the caller against the round-result contract
+    before anything is stored - a malformed answer is a failure, never a design.
+    ``source`` is the provider id that answered, ``cost`` the adapter's own cost
+    telemetry (empty when the provider reported none - never a fabricated zero).
+    """
+
+    source: str
+    content: Mapping[str, Any] = field(default_factory=dict)
+    cost: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "source", _text(self.source, "source"))
+        object.__setattr__(
+            self, "content", _bounded_deliberation(self.content, "content")
+        )
+        object.__setattr__(self, "cost", _mapping(self.cost, "cost"))
+
+    def to_dict(self) -> dict[str, Any]:
+        """Deterministic, JSON-safe representation."""
+        return {
+            "source": self.source,
+            "content": dict(self.content),
+            "cost": dict(self.cost),
+        }
+
+
+@dataclass(frozen=True)
+class AgentReconsiderResult:
+    """What an architect answers in Round 2: KEEP / REVISE / WITHDRAW plus deltas."""
+
+    source: str
+    content: Mapping[str, Any] = field(default_factory=dict)
+    cost: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "source", _text(self.source, "source"))
+        object.__setattr__(
+            self, "content", _bounded_deliberation(self.content, "content")
+        )
+        object.__setattr__(self, "cost", _mapping(self.cost, "cost"))
+
+    def to_dict(self) -> dict[str, Any]:
+        """Deterministic, JSON-safe representation."""
+        return {
+            "source": self.source,
+            "content": dict(self.content),
+            "cost": dict(self.cost),
+        }
+
+
+@runtime_checkable
+class DeliberationAgentPort(Protocol):
+    """One independent architect of the review board.
+
+    An implementation must
+
+    * be handed only an :class:`AgentAnalysisQuery` (Round 1) or an
+      :class:`AgentReconsiderQuery` (Round 2) - never a peer's raw answer;
+    * answer with structured conclusions only, never hidden chain-of-thought;
+    * never mutate anything: it receives no storage, no transaction boundary and
+      no workflow authority.
+    """
+
+    def analyse(self, query: AgentAnalysisQuery) -> AgentAnalysisResult: ...
+
+    def reconsider(self, query: AgentReconsiderQuery) -> AgentReconsiderResult: ...
+
+
+@dataclass(frozen=True)
+class LeadReviewQuery:
+    """What the chair receives before it reviews: both Round-1 results, and nothing else.
+
+    Deliberately absent: any hidden chain-of-thought, any provider system prompt,
+    any credential, any chat history and any unrelated log. The chair reasons over
+    two *structured conclusions*.
+    """
+
+    project: str
+    requirement: str
+    deliberation_id: str
+    agent_a: Mapping[str, Any] = field(default_factory=dict)
+    agent_b: Mapping[str, Any] = field(default_factory=dict)
+    context: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for name in ("project", "requirement", "deliberation_id"):
+            object.__setattr__(
+                self, name, _text(getattr(self, name), name)
+            )
+        for name in ("agent_a", "agent_b", "context"):
+            object.__setattr__(
+                self, name, _bounded_deliberation(getattr(self, name), name)
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Deterministic, JSON-safe representation."""
+        return {
+            "project": self.project,
+            "requirement": self.requirement,
+            "deliberation_id": self.deliberation_id,
+            "agent_a": dict(self.agent_a),
+            "agent_b": dict(self.agent_b),
+            "context": dict(self.context),
+        }
+
+
+@dataclass(frozen=True)
+class LeadReviewResult:
+    """The chair's **review packet source** - agreements, conflicts and questions.
+
+    This is explicitly *not* a final architecture: it is the structured criticism
+    one bounded reconsideration round is built from.
+    """
+
+    source: str
+    content: Mapping[str, Any] = field(default_factory=dict)
+    cost: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "source", _text(self.source, "source"))
+        object.__setattr__(
+            self, "content", _bounded_deliberation(self.content, "content")
+        )
+        object.__setattr__(self, "cost", _mapping(self.cost, "cost"))
+
+    def to_dict(self) -> dict[str, Any]:
+        """Deterministic, JSON-safe representation."""
+        return {
+            "source": self.source,
+            "content": dict(self.content),
+            "cost": dict(self.cost),
+        }
+
+
+@dataclass(frozen=True)
+class LeadSynthesisQuery:
+    """Everything the chair receives for the **final** synthesis, and nothing else.
+
+    Five exact upstream results travel with the content: both Round-1 results, the
+    LeadReview and both Round-2 answers. The chair sees no storage port, no
+    transaction boundary, no workflow authority and no credential.
+    """
+
+    project: str
+    requirement: str
+    deliberation_id: str
+    agent_a_round1: Mapping[str, Any] = field(default_factory=dict)
+    agent_b_round1: Mapping[str, Any] = field(default_factory=dict)
+    lead_review: Mapping[str, Any] = field(default_factory=dict)
+    agent_a_round2: Mapping[str, Any] = field(default_factory=dict)
+    agent_b_round2: Mapping[str, Any] = field(default_factory=dict)
+    context: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for name in ("project", "requirement", "deliberation_id"):
+            object.__setattr__(
+                self, name, _text(getattr(self, name), name)
+            )
+        for name in (
+            "agent_a_round1",
+            "agent_b_round1",
+            "lead_review",
+            "agent_a_round2",
+            "agent_b_round2",
+            "context",
+        ):
+            object.__setattr__(
+                self, name, _bounded_deliberation(getattr(self, name), name)
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Deterministic, JSON-safe representation."""
+        return {
+            "project": self.project,
+            "requirement": self.requirement,
+            "deliberation_id": self.deliberation_id,
+            "agent_a_round1": dict(self.agent_a_round1),
+            "agent_b_round1": dict(self.agent_b_round1),
+            "lead_review": dict(self.lead_review),
+            "agent_a_round2": dict(self.agent_a_round2),
+            "agent_b_round2": dict(self.agent_b_round2),
+            "context": dict(self.context),
+        }
+
+
+@dataclass(frozen=True)
+class FinalSynthesisResult:
+    """The chair's final architecture synthesis - advisory content only.
+
+    It can never approve anything: the application stores it as an **advisory**
+    synthesis, and only a human decision through the unchanged proposal approval
+    path can accept a managed project's design.
+    """
+
+    source: str
+    content: Mapping[str, Any] = field(default_factory=dict)
+    cost: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "source", _text(self.source, "source"))
+        object.__setattr__(
+            self, "content", _bounded_deliberation(self.content, "content")
+        )
+        object.__setattr__(self, "cost", _mapping(self.cost, "cost"))
+
+    def to_dict(self) -> dict[str, Any]:
+        """Deterministic, JSON-safe representation."""
+        return {
+            "source": self.source,
+            "content": dict(self.content),
+            "cost": dict(self.cost),
+        }
+
+
+@runtime_checkable
+class DeliberationLeadPort(Protocol):
+    """The chair of the review board: reviews two proposals, then synthesizes.
+
+    Two semantic operations, deliberately distinct - ``review`` produces the
+    structured criticism the reconsideration round is built from, ``synthesize``
+    produces the final advisory design. An implementation must
+
+    * reason over the structured conclusions it is handed and **never vote**:
+      there is no majority rule, no provider ranking and no weight here;
+    * preserve a disagreement that remains instead of claiming a consensus that
+      does not exist;
+    * answer with structured, JSON-safe content only - a malformed answer is a
+      failure, never a synthesis;
+    * never mutate anything: it has no storage, no transaction boundary, no FSM
+      and no approval authority, and it can never reach ``VERIFIED``.
+    """
+
+    def review(self, query: LeadReviewQuery) -> LeadReviewResult: ...
+
+    def synthesize(self, query: LeadSynthesisQuery) -> FinalSynthesisResult: ...

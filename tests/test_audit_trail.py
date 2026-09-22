@@ -103,8 +103,10 @@ class TestAuditEntry:
         """``STEP`` was added with the Step 9 orchestrator, ``ACR`` with Step 11,
         ``PROJECT`` with the Step 20 human-override use-case, ``PLAN`` with the
         Step 25 plan loader, ``PROPOSAL`` with the Step 27 managed-project
-        architecture proposal and ``SUPERVISION`` with the Step 28 advisory
-        supervision use-case (durable supervision decisions only).
+        architecture proposal, ``SUPERVISION`` with the Step 28 advisory
+        supervision use-case (durable supervision decisions only) and
+        ``DELIBERATION`` with the Step 29 controlled architecture deliberation
+        (lifecycle acts only, never a read).
         """
         assert {member.value for member in AuditEntityType} == {
             "ADR",
@@ -115,6 +117,7 @@ class TestAuditEntry:
             "PLAN",
             "PROPOSAL",
             "SUPERVISION",
+            "DELIBERATION",
         }
 
     def test_actions_are_canonical(self) -> None:

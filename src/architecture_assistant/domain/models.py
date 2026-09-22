@@ -15,8 +15,12 @@ from typing import Any, ClassVar, Mapping, Optional
 from .enums import (
     ACRStatus,
     ADRStatus,
+    DELIBERATION_MAX_REVIEW_ROUNDS,
     SUPERVISION_ALLOWING_STATUSES,
     DecisionStatus,
+    DeliberationStage,
+    DeliberationStageStatus,
+    DeliberationStatus,
     Mode,
     Phase,
     ProposalStatus,
@@ -38,6 +42,8 @@ __all__ = [
     "ArchitectureVersion",
     "ArchitectureChangeRequest",
     "ArchitectureProposal",
+    "DeliberationRun",
+    "DeliberationArtifact",
     "SupervisionRecord",
     "ADR",
     "Risk",
@@ -730,6 +736,201 @@ class ArchitectureProposal(DomainModel):
             ProposalStatus.REJECTED,
             ProposalStatus.SUPERSEDED,
         )
+
+
+@dataclass(frozen=True)
+class DeliberationRun(DomainModel):
+    """One controlled architecture deliberation over one operator requirement.
+
+    Scope (the boundary this type exists to keep)
+    ---------------------------------------------
+    A deliberation is **advisory** and **managed-project scoped**: it reviews the
+    design of the project the assistant manages. It is therefore unrelated to
+    ``ArchitectureVersion`` (the assistant's own baseline), to
+    ``ArchitectureChangeRequest``, to an assistant ADR/risk/rule and to the
+    realization gate. It also carries **no** workflow authority: it cannot set
+    ``VERIFIED``, move a Step, or approve anything.
+
+    The run is the *identity* half of the pair
+    ------------------------------------------
+    ``deliberation_id`` is a deterministic content hash of the material inputs
+    (project, requirement, the three configured provider/model pairs, the bounded
+    context fingerprint and the revision lineage), never a timestamp. Every
+    stage result is a separate :class:`DeliberationArtifact` row, so the
+    lifecycle stays queryable and a stage is individually addressable.
+
+    ``revision_no`` / ``revision_of_deliberation_id`` are the run's own lineage:
+    a human "re-run with feedback" creates a **new** run pointing at the previous
+    one, and the previous run stays immutable. Nothing here re-deliberates by
+    itself.
+    """
+
+    deliberation_id: str
+    project: str
+    requirement: str
+    fingerprint: str
+    context_fingerprint: str
+    agent_a_provider: str
+    agent_a_model: str
+    agent_b_provider: str
+    agent_b_model: str
+    lead_provider: str
+    lead_model: str
+    created_at: datetime
+    updated_at: datetime
+    status: DeliberationStatus = DeliberationStatus.DRAFT
+    max_review_rounds: int = DELIBERATION_MAX_REVIEW_ROUNDS
+    revision_no: int = 1
+    revision_of_deliberation_id: Optional[str] = None
+    error_reason: str = ""
+    stale_reason: str = ""
+
+    _ENUM_FIELDS: ClassVar[Mapping[str, type]] = {"status": DeliberationStatus}
+    _DATETIME_FIELDS: ClassVar[tuple[str, ...]] = ("created_at", "updated_at")
+
+    def __post_init__(self) -> None:
+        for name in (
+            "deliberation_id",
+            "project",
+            "requirement",
+            "fingerprint",
+            "context_fingerprint",
+            "agent_a_provider",
+            "agent_a_model",
+            "agent_b_provider",
+            "agent_b_model",
+            "lead_provider",
+            "lead_model",
+        ):
+            object.__setattr__(
+                self, name, _require_text(getattr(self, name), name)
+            )
+        object.__setattr__(
+            self,
+            "status",
+            _coerce_enum(self.status, DeliberationStatus, "status"),
+        )
+        for name in ("created_at", "updated_at"):
+            object.__setattr__(
+                self, name, _require_datetime(getattr(self, name), name)
+            )
+        object.__setattr__(
+            self,
+            "max_review_rounds",
+            _require_int(
+                self.max_review_rounds, "max_review_rounds", minimum=1, maximum=1
+            ),
+        )
+        object.__setattr__(
+            self,
+            "revision_no",
+            _require_int(self.revision_no, "revision_no", minimum=1),
+        )
+        if self.revision_no == 1:
+            if self.revision_of_deliberation_id is not None:
+                raise ValueError(
+                    "revision_of_deliberation_id must be None for the first "
+                    "revision (revision_no 1)"
+                )
+        else:
+            object.__setattr__(
+                self,
+                "revision_of_deliberation_id",
+                _require_text(
+                    self.revision_of_deliberation_id,
+                    "revision_of_deliberation_id",
+                ),
+            )
+            if self.revision_of_deliberation_id == self.deliberation_id:
+                raise ValueError("a revision must not supersede itself")
+        object.__setattr__(self, "error_reason", self.error_reason or "")
+        object.__setattr__(self, "stale_reason", self.stale_reason or "")
+
+    @property
+    def is_settled(self) -> bool:
+        """Whether nothing more can happen without a new run.
+
+        ``READY_FOR_PROPOSAL`` is settled *for the deliberation*: the synthesis
+        exists and only a human proposal decision remains.
+        """
+        return self.status in (
+            DeliberationStatus.READY_FOR_PROPOSAL,
+            DeliberationStatus.ERROR,
+            DeliberationStatus.CANCELLED,
+        )
+
+    @property
+    def is_terminal_failure(self) -> bool:
+        """Whether the run stopped without ever reaching a final synthesis."""
+        return self.status in (
+            DeliberationStatus.ERROR,
+            DeliberationStatus.CANCELLED,
+        )
+
+
+@dataclass(frozen=True)
+class DeliberationArtifact(DomainModel):
+    """One addressable stage result of one deliberation.
+
+    ``stage`` names which of the six stages produced it, ``slot`` names which
+    seat answered (``agent_a`` / ``agent_b`` / ``lead``) and ``content`` carries
+    the stage's own structured, JSON-safe result. ``fingerprint`` is a content
+    hash of ``(deliberation_id, stage, slot, content)``, so a rewritten artifact
+    is detectable and a downstream stage can depend on the **exact** upstream
+    identity instead of on a timestamp.
+
+    An artifact never carries a credential and never carries hidden provider
+    reasoning: the adapters return structured conclusions only, and the content
+    is validated by the use-case before it is stored.
+    """
+
+    artifact_id: str
+    deliberation_id: str
+    stage: DeliberationStage
+    status: DeliberationStageStatus
+    content: Mapping[str, Any] = field(default_factory=dict)
+    fingerprint: str = ""
+    slot: str = ""
+    created_at: datetime = field(default_factory=utc_now)
+
+    _ENUM_FIELDS: ClassVar[Mapping[str, type]] = {
+        "stage": DeliberationStage,
+        "status": DeliberationStageStatus,
+    }
+    _DATETIME_FIELDS: ClassVar[tuple[str, ...]] = ("created_at",)
+    _MAPPING_FIELDS: ClassVar[tuple[str, ...]] = ("content",)
+
+    def __post_init__(self) -> None:
+        for name in ("artifact_id", "deliberation_id"):
+            object.__setattr__(
+                self, name, _require_text(getattr(self, name), name)
+            )
+        object.__setattr__(
+            self, "stage", _coerce_enum(self.stage, DeliberationStage, "stage")
+        )
+        object.__setattr__(
+            self,
+            "status",
+            _coerce_enum(self.status, DeliberationStageStatus, "status"),
+        )
+        object.__setattr__(self, "content", dict(self.content or {}))
+        object.__setattr__(self, "slot", self.slot or "")
+        if self.fingerprint:
+            object.__setattr__(
+                self,
+                "fingerprint",
+                _require_text(self.fingerprint, "fingerprint"),
+            )
+        object.__setattr__(
+            self,
+            "created_at",
+            _require_datetime(self.created_at, "created_at"),
+        )
+
+    @property
+    def is_usable(self) -> bool:
+        """Whether a downstream stage may depend on this artifact."""
+        return self.status is DeliberationStageStatus.COMPLETE
 
 
 @dataclass(frozen=True)

@@ -24,6 +24,11 @@ __all__ = [
     "RiskStatus",
     "DecisionStatus",
     "ProposalStatus",
+    "DELIBERATION_MAX_REVIEW_ROUNDS",
+    "DeliberationStatus",
+    "DeliberationStage",
+    "DeliberationStageStatus",
+    "Round2Decision",
     "SupervisorAction",
     "SupervisorRisk",
     "SupervisorStatus",
@@ -213,6 +218,92 @@ class ProposalStatus(StrEnum):
     REJECTED = "REJECTED"
     REVISION_REQUESTED = "REVISION_REQUESTED"
     SUPERSEDED = "SUPERSEDED"
+
+
+#: How many review rounds a deliberation may run. Exactly one: the second round
+#: is a **single** bounded reconsideration, never an autonomous debate loop
+#: (``A -> B -> A -> B -> ...``). It is a constant of the lifecycle, not a knob.
+DELIBERATION_MAX_REVIEW_ROUNDS = 1
+
+
+class DeliberationStatus(StrEnum):
+    """Lifecycle of one controlled architecture deliberation.
+
+    This is deliberately **not** :class:`StepState`: the Step FSM drives the
+    assistant's Cline loop (dispatch, report, verify, retry) and shares none of
+    this lifecycle. A deliberation is an advisory review board over one operator
+    requirement, and it moves strictly forward through its stages:
+
+    ``DRAFT`` -> ``ROUND1_RUNNING`` -> ``ROUND1_COMPLETE`` ->
+    ``LEAD_REVIEW_RUNNING`` -> ``LEAD_REVIEW_COMPLETE`` -> ``ROUND2_RUNNING`` ->
+    ``ROUND2_COMPLETE`` -> ``SYNTHESIS_RUNNING`` -> ``READY_FOR_PROPOSAL``.
+
+    ``ERROR`` records a stage failure (the run keeps every completed stage) and
+    ``CANCELLED`` a deliberate human stop. Neither is a licence to loop: a failed
+    stage is retried only by an explicit operator action.
+    """
+
+    DRAFT = "DRAFT"
+    ROUND1_RUNNING = "ROUND1_RUNNING"
+    ROUND1_COMPLETE = "ROUND1_COMPLETE"
+    LEAD_REVIEW_RUNNING = "LEAD_REVIEW_RUNNING"
+    LEAD_REVIEW_COMPLETE = "LEAD_REVIEW_COMPLETE"
+    ROUND2_RUNNING = "ROUND2_RUNNING"
+    ROUND2_COMPLETE = "ROUND2_COMPLETE"
+    SYNTHESIS_RUNNING = "SYNTHESIS_RUNNING"
+    READY_FOR_PROPOSAL = "READY_FOR_PROPOSAL"
+    ERROR = "ERROR"
+    CANCELLED = "CANCELLED"
+
+
+class DeliberationStage(StrEnum):
+    """The six addressable stages of a deliberation.
+
+    Every stage result is stored as its own artifact row, so a stage is
+    individually addressable (round history, traceability, cost attribution,
+    restart safety) instead of being hidden inside one opaque document.
+    """
+
+    AGENT_A_ROUND1 = "AGENT_A_ROUND1"
+    AGENT_B_ROUND1 = "AGENT_B_ROUND1"
+    LEAD_REVIEW = "LEAD_REVIEW"
+    AGENT_A_ROUND2 = "AGENT_A_ROUND2"
+    AGENT_B_ROUND2 = "AGENT_B_ROUND2"
+    FINAL_SYNTHESIS = "FINAL_SYNTHESIS"
+
+
+class DeliberationStageStatus(StrEnum):
+    """Outcome of one deliberation stage.
+
+    ``COMPLETE`` - the stage produced a usable structured result;
+    ``ABSTAINED`` - a provider the operator deliberately disabled answered
+    nothing (no call was made); ``ERROR`` - the stage failed (a provider failure,
+    a malformed answer or a missing collaborator) and the honest reason is
+    recorded; ``INSUFFICIENT_PEER_REVIEW`` - the peer stage failed, so the Lead
+    could not review two independent proposals and the run must never pretend it
+    did; ``PENDING`` - the stage has not run yet.
+    """
+
+    PENDING = "PENDING"
+    COMPLETE = "COMPLETE"
+    ABSTAINED = "ABSTAINED"
+    ERROR = "ERROR"
+    INSUFFICIENT_PEER_REVIEW = "INSUFFICIENT_PEER_REVIEW"
+
+
+class Round2Decision(StrEnum):
+    """How one architect answered the Lead's structured review of its Round 1.
+
+    ``KEEP`` - the Round-1 recommendation stands unchanged;
+    ``REVISE`` - some decisions changed (``changed_decisions`` is non-empty);
+    ``WITHDRAW`` - the recommendation is withdrawn entirely. None of the three is
+    a vote and none of them is a majority: each architect answers about its own
+    proposal, and the Lead reasons over the answers.
+    """
+
+    KEEP = "KEEP"
+    REVISE = "REVISE"
+    WITHDRAW = "WITHDRAW"
 
 
 class SupervisorAction(StrEnum):

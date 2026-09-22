@@ -136,6 +136,11 @@ class TestSaveAndReload:
             "advisor_1": {"provider": "openai", "model": "m1", "api_key": KEY},
             "advisor_2": {"provider": "claude", "model": "m2", "api_key": ""},
             "advisor_3": {"provider": "grok", "model": "m3", "api_key": ""},
+            # Step 29 added the deliberation seats (two architects and a chair) to
+            # the same file, so one save covers both workflows.
+            "agent_a": {"provider": "deepseek", "model": "", "api_key": ""},
+            "agent_b": {"provider": "claude", "model": "", "api_key": ""},
+            "lead": {"provider": "openai", "model": "", "api_key": ""},
         }
 
     def test_a_write_that_cannot_land_answers_false_and_never_raises(

@@ -143,15 +143,17 @@ class TestDependencyDirection:
         assert result.is_compliant is True
         assert result.violations == ()
         assert result.baseline_version == ARCHITECTURE_CURRENT.version
-        # The frozen core: 69 modules (Step 25 added the plan loader, Step 26 the
+        # The frozen core: 71 modules (Step 25 added the plan loader, Step 26 the
         # advisory architecture review, Step 27 the log-event contract and the
         # managed-project proposal pair, Step 28 the advisory supervision quartet:
         # the policy, the use-case with its gate, the headless runtime and the
         # offline scripted supervisor; the provider-settings step added the
         # per-advisor provider configuration, its composition-level advisor
-        # factory, the DeepSeek advisor adapter and the disabled advisor),
+        # factory, the DeepSeek advisor adapter and the disabled advisor; Step 29
+        # added the controlled architecture deliberation and its provider-backed
+        # architect/chair adapters),
         # three rules, baseline 1.1.
-        assert len(source.modules()) == 69
+        assert len(source.modules()) == 71
         assert len(ArchitectureValidator().baseline.rules) == 3
 
 
@@ -222,6 +224,15 @@ class TestNoWritePath:
             "test_connection_1",
             "test_connection_2",
             "test_connection_3",
+            # the deliberation workbench's own controls (Step 29): each one runs
+            # one stage of the advisory board through the core, and none of them
+            # can approve a proposal, reach VERIFIED or start a Cline task
+            "deliberation_round1",
+            "deliberation_lead_review",
+            "deliberation_round2",
+            "deliberation_synthesis",
+            "deliberation_proposal",
+            "deliberation_cancel",
         }
         # The rest only *displays* the last payload: one window each, no core work
         # and no write. A popup can therefore never become a second write path.
