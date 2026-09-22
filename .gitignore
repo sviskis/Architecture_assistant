@@ -5,6 +5,8 @@ __pycache__/
 .mini_build/
 data/
 reports/
+# the operator panel's remembered window layout (a local preference, never state)
+data/gui_layout.json
 
 .env
 *.db

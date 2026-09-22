@@ -4,25 +4,40 @@ Every string this module shows comes from the controller's view model, and every
 button calls back into the application with an intent key. No widget here ever
 touches the assistant, a repository or a connection, and none of them decides
 anything: a disabled button is advice, and the core still validates the action.
+
+The *layout* is the operator's: every major region sits in a splitter, and this
+module both applies a remembered layout (sash positions and the open tab) and
+reports the current one back. Reading and writing the layout file belongs to the
+layout store and the application - no widget here opens a file.
 """
 
 from __future__ import annotations
 
 import tkinter as tk
 from tkinter import scrolledtext, ttk
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 from .controller import INTENTS
 
 __all__ = [
+    "ADVISOR_SPLIT_MIN_SIZE",
     "AUDIT_COLUMNS",
     "CONFLICT_COLUMNS",
     "COST_COLUMNS",
     "FACT_COLUMNS",
     "GROUPS",
     "LOG_COLUMNS",
+    "MAIN_SPLIT_MIN_SIZE",
+    "MAIN_SPLIT_TOP_START_SHARE",
+    "MIN_ON_SCREEN_EDGE",
+    "PROPOSAL_SPLIT_MIN_SIZE",
+    "REVIEW_RESULT_SPLIT_MIN_SIZE",
+    "REVIEW_SECTION_SPLIT_MIN_SIZE",
+    "REVIEW_SPLIT_MIN_SIZE",
     "RISK_COLUMNS",
+    "SPLIT_KEYS",
     "SUPERVISION_HISTORY_COLUMNS",
+    "SUPERVISOR_SPLIT_MIN_SIZE",
     "MainWindow",
 ]
 
@@ -157,6 +172,115 @@ PROPOSAL_HISTORY_COLUMNS: tuple[tuple[str, str, int], ...] = (
 )
 
 
+#: Minimum size of **every pane** of one draggable splitter, in pixels. These
+#: exist so a drag can never collapse a region to nothing: whatever the operator
+#: does, each pane keeps at least this much room and can always be dragged back.
+#: A minimum is a floor, never a layout - no widget position is hard-coded.
+#:
+#: Tk 8.6's ``ttk::panedwindow`` has no ``-minsize`` pane option (it arrived in
+#: later Tk versions), so the floor is enforced by ``_clamp_split`` on every
+#: finished drag instead of by an option this Tk would reject.
+MAIN_SPLIT_MIN_SIZE = 150
+REVIEW_SPLIT_MIN_SIZE = 90
+REVIEW_RESULT_SPLIT_MIN_SIZE = 70
+REVIEW_SECTION_SPLIT_MIN_SIZE = 60
+ADVISOR_SPLIT_MIN_SIZE = 180
+SUPERVISOR_SPLIT_MIN_SIZE = 160
+PROPOSAL_SPLIT_MIN_SIZE = 130
+
+#: Where the main splitter starts: the top area is given its natural height, but
+#: never more than this share of the window, so the notebook (the tab content)
+#: always owns most of it and a window resize grows the notebook more.
+MAIN_SPLIT_TOP_START_SHARE = 0.45
+
+#: The stable name of every splitter whose sash positions are remembered, in the
+#: order they are built. A remembered layout stores one sash list per name, so a
+#: saved position is matched to a splitter by *name* - never by a widget path,
+#: which differs on every run. A name that no longer exists (or a splitter whose
+#: panes were rebuilt with a different count) is simply not restored.
+SPLIT_KEYS: tuple[str, ...] = (
+    "main",
+    "review",
+    "review_advisors",
+    "review_results",
+    "review_bottom",
+    "review_merged",
+    "review_judge",
+    "supervisor",
+    "proposal",
+)
+
+#: How much of a remembered window position must still be on screen, in pixels,
+#: before it is used. A position that would hide the panel (a monitor that is
+#: gone, a resolution that shrank) is dropped and only the size is kept, because
+#: a stale preference must never be able to hide the window it belongs to.
+MIN_ON_SCREEN_EDGE = 60
+
+
+def _even_sashes(count: int) -> tuple[float, ...]:
+    """Sash fractions that split ``count`` panes evenly (thirds for three)."""
+    return tuple(index / count for index in range(1, count))
+
+
+def _fraction_sashes(*fractions: float) -> Callable[[int], tuple[int, ...]]:
+    """A split start that places each sash at a fraction of the split's size."""
+    return lambda total: tuple(int(total * fraction) for fraction in fractions)
+
+
+def _add_pane(
+    split: Any, child: Any, minimum: int, *, weight: int = 1
+) -> None:
+    """Add one draggable pane to ``split`` and keep its floor alive.
+
+    ``weight`` decides how extra space is shared when the window (or the split)
+    grows; ``minimum`` is the size the pane can never be dragged below. The floor
+    is applied on ``<ButtonRelease-1>`` through ``after_idle``, i.e. after Tk's
+    own drag handling, so a drag is never fought while the mouse is down.
+    """
+    split.add(child, weight=weight)
+    split.bind(
+        "<ButtonRelease-1>",
+        lambda _event, s=split, m=minimum: s.after_idle(
+            lambda: _clamp_split(s, m)
+        ),
+        add="+",
+    )
+
+
+def _clamp_split(split: Any, minimum: int) -> None:
+    """Push the sashes of one split back to where every pane keeps its floor.
+
+    Tk 8.6 offers no pane minimum at all, so a pane could otherwise be dragged
+    to zero width and become impossible to grab again. The sashes are recomputed
+    left to right, which keeps the pane order and the total size.
+    """
+    if split is None or minimum <= 0:
+        return
+    panes = split.panes()
+    if len(panes) < 2:
+        return
+    horizontal = str(split.cget("orient")) == "horizontal"
+    total = split.winfo_width() if horizontal else split.winfo_height()
+    if total <= 1:
+        return
+    try:
+        sash = int(split.cget("sashwidth"))
+    except tk.TclError:  # pragma: no cover - every ttk theme has a sash
+        sash = 0
+    room = minimum + sash
+    if total < room * len(panes):
+        # Smaller than the floors allow: share what there is, never overflow.
+        room = max(1, total // len(panes))
+    start = 0
+    for index in range(len(panes) - 1):
+        current = split.sashpos(index)
+        lowest = start + room
+        highest = total - room * (len(panes) - index - 1)
+        position = max(lowest, min(current, highest))
+        if position != current:
+            split.sashpos(index, position)
+        start = position
+
 #: The colour of one entry or pane per level. Kept in one place so the Logs tab
 #: and the advisor panes can never disagree about what "warning" looks like.
 _LEVEL_COLOURS: dict[str, str] = {
@@ -180,8 +304,16 @@ class MainWindow:
         on_proposal_requirement: Callable[[str], None] = lambda _text: None,
         on_revision_feedback: Callable[[str], None] = lambda _text: None,
         on_instruction: Callable[[str], None] = lambda _text: None,
+        layout: Optional[Mapping[str, Any]] = None,
     ) -> None:
         self._root = root
+        #: The layout the host remembered (window geometry, the open tab, one
+        #: sash list per splitter). Only ever read through ``_saved_sashes`` and
+        #: ``_restore_saved_tab``, which validate what they touch: a damaged
+        #: layout costs the operator a default, never a working panel.
+        self._layout: Mapping[str, Any] = (
+            layout if isinstance(layout, Mapping) else {}
+        )
         self._on_action = on_action
         self._on_actor = on_actor
         self._on_question = on_question
@@ -191,6 +323,31 @@ class MainWindow:
         self._on_instruction = on_instruction
         self.buttons: dict[str, ttk.Button] = {}
         self._text: dict[str, tk.StringVar] = {}
+        #: The draggable splits. Every major region lives in one of these, so the
+        #: operator resizes the window with the mouse instead of accepting a
+        #: fixed pixel layout. ``None`` only until the corresponding tab is built.
+        self._main_split: Any = None
+        self._top_area: Any = None
+        self._notebook: Any = None
+        self._review_split: Any = None
+        self._review_bottom_split: Any = None
+        self._review_results_split: Any = None
+        #: The two vertical splitters inside the shared results: merged evidence
+        #: over conflicts, and the judge over the advisory decision.
+        self._review_section_splits: list[Any] = []
+        self._proposal_split: Any = None
+        self._supervisor_split: Any = None
+        self._supervisor_frames: dict[str, Any] = {}
+        #: The splitters whose starting sash positions have already been placed.
+        self._placed_splits: set[str] = set()
+        #: The splitters the operator has dragged by hand in this session. A
+        #: remembered position keeps winning over Tk's own re-arrange until that
+        #: happens; after it, the splitters are Tk's for the rest of the session.
+        self._operator_splits: set[str] = set()
+        #: Every splitter under its stable name (see ``SPLIT_KEYS``), filled by
+        #: ``_register_splits`` once every tab has been built: the single place
+        #: that knows the layout's vocabulary.
+        self._splits: dict[str, Any] = {}
         self._monitor: Any = None
         self._audit: Any = None
         self._risks: Any = None
@@ -239,8 +396,20 @@ class MainWindow:
         root = self._root
         root.title("Architecture Assistant - operator panel")
         root.columnconfigure(0, weight=1)
-        root.rowconfigure(3, weight=1)
-        root.rowconfigure(4, weight=2)
+        root.rowconfigure(0, weight=1)
+
+        # One horizontal splitter right below the project header: everything the
+        # operator *does* (current work and the action buttons) sits in the top
+        # pane, the tab notebook in the bottom one. The notebook owns the larger
+        # weight, so a window resize gives it most of the new vertical space.
+        self._main_split = ttk.PanedWindow(root, orient="vertical")
+        self._main_split.grid(row=0, column=0, sticky="nsew")
+
+        top_area = ttk.Frame(self._main_split)
+        top_area.columnconfigure(0, weight=1)
+        top_area.rowconfigure(3, weight=1)
+        _add_pane(self._main_split, top_area, MAIN_SPLIT_MIN_SIZE, weight=1)
+        self._top_area = top_area
 
         self._build_top()
         self._build_operator()
@@ -248,8 +417,61 @@ class MainWindow:
         self._build_tabs()
         self._build_status()
 
+        # The window's own geometry is the application's to apply (it owns the
+        # toplevel); everything inside the window is named and restored here.
+        self._register_splits()
+        self._restore_saved_tab()
+
+        # Every splitter is given a sensible start the first time it is laid out;
+        # after that the sashes belong to the operator. A remembered layout wins
+        # over that start (see ``_start_split``). The advisor split is a special
+        # case: its panes (one per configured advisor) only exist after the first
+        # render, so its start is count-aware (see ``_advisor_sashes``) and it is
+        # re-placed whenever that number changes.
+        self._place_split_start(
+            "main",
+            self._main_split_start,
+            MAIN_SPLIT_MIN_SIZE,
+        )
+        self._place_split_start(
+            "review",
+            _fraction_sashes(0.12, 0.55),
+            REVIEW_SPLIT_MIN_SIZE,
+        )
+        self._place_split_start(
+            "review_results",
+            _fraction_sashes(0.5),
+            REVIEW_RESULT_SPLIT_MIN_SIZE,
+        )
+        self._place_split_start(
+            "review_bottom",
+            _fraction_sashes(0.72),
+            REVIEW_RESULT_SPLIT_MIN_SIZE,
+        )
+        for key in ("review_merged", "review_judge"):
+            self._place_split_start(
+                key,
+                _fraction_sashes(0.5),
+                REVIEW_SECTION_SPLIT_MIN_SIZE,
+            )
+        self._place_split_start(
+            "supervisor",
+            _fraction_sashes(*_even_sashes(3)),
+            SUPERVISOR_SPLIT_MIN_SIZE,
+        )
+        self._place_split_start(
+            "proposal",
+            _fraction_sashes(0.38),
+            PROPOSAL_SPLIT_MIN_SIZE,
+        )
+        self._place_split_start(
+            "review_advisors",
+            self._advisor_sashes,
+            ADVISOR_SPLIT_MIN_SIZE,
+        )
+
     def _build_top(self) -> None:
-        frame = ttk.Frame(self._root, padding=(8, 6, 8, 2))
+        frame = ttk.Frame(self._top_area, padding=(8, 6, 8, 2))
         frame.grid(row=0, column=0, sticky="ew")
         for column in range(5):
             frame.columnconfigure(column, weight=1)
@@ -270,7 +492,7 @@ class MainWindow:
             ).grid(row=1, column=column, sticky="w")
 
         self._banner = ttk.Label(
-            self._root,
+            self._top_area,
             textvariable=self._var("banner"),
             padding=(10, 3),
             anchor="w",
@@ -278,7 +500,7 @@ class MainWindow:
         self._banner.grid(row=1, column=0, sticky="ew")
 
     def _build_operator(self) -> None:
-        frame = ttk.Frame(self._root, padding=(8, 2, 8, 4))
+        frame = ttk.Frame(self._top_area, padding=(8, 2, 8, 4))
         frame.grid(row=2, column=0, sticky="ew")
         ttk.Label(frame, text="Operator:").grid(row=0, column=0, sticky="w")
         self._actor = ttk.Entry(frame, width=28)
@@ -294,10 +516,11 @@ class MainWindow:
         ).grid(row=0, column=2, sticky="w")
 
     def _build_middle(self) -> None:
-        frame = ttk.Frame(self._root, padding=(8, 4))
+        frame = ttk.Frame(self._top_area, padding=(8, 4))
         frame.grid(row=3, column=0, sticky="nsew")
         frame.columnconfigure(0, weight=1)
         frame.columnconfigure(1, weight=1)
+        frame.rowconfigure(0, weight=1)
 
         work = ttk.LabelFrame(frame, text="Current work", padding=(8, 6))
         work.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
@@ -361,8 +584,15 @@ class MainWindow:
                 row += 1
 
     def _build_tabs(self) -> None:
-        notebook = ttk.Notebook(self._root)
-        notebook.grid(row=4, column=0, sticky="nsew", padx=8, pady=(2, 4))
+        """The tab notebook: the bottom pane of the main splitter."""
+        pane = ttk.Frame(self._main_split, padding=(8, 2, 8, 4))
+        pane.columnconfigure(0, weight=1)
+        pane.rowconfigure(0, weight=1)
+        _add_pane(self._main_split, pane, MAIN_SPLIT_MIN_SIZE, weight=3)
+
+        notebook = ttk.Notebook(pane)
+        notebook.grid(row=0, column=0, sticky="nsew")
+        self._notebook = notebook
 
         monitor = ttk.Frame(notebook, padding=6)
         self._monitor = ttk.Treeview(
@@ -397,11 +627,13 @@ class MainWindow:
         **advisory** supervisor: what it proposes, why, and what the fail-closed
         gate answered. A proposal here is never authority - the authoritative
         workflow is on the Monitor/Audit tabs and is owned by the core.
+
+        The three panes are the panes of one horizontal splitter, so the operator
+        decides how much width each of them gets.
         """
         frame = ttk.Frame(notebook, padding=6)
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(2, weight=2)
-        frame.rowconfigure(3, weight=2)
         frame.rowconfigure(4, weight=2)
 
         note = ttk.Label(
@@ -420,21 +652,14 @@ class MainWindow:
             row=1,
         )
 
-        panes = ttk.Frame(frame)
+        panes = ttk.PanedWindow(frame, orient="horizontal")
         panes.grid(row=2, column=0, sticky="nsew", pady=(4, 0))
-        for column in range(3):
-            panes.columnconfigure(column, weight=1)
-            panes.rowconfigure(0, weight=1)
-        for column, key in enumerate(
-            ("assistant_pane", "cline_pane", "supervisor_pane")
-        ):
-            box = ttk.LabelFrame(panes, text=key.replace("_pane", "").title())
-            box.grid(
-                row=0,
-                column=column,
-                sticky="nsew",
-                padx=(0, 4) if column < 2 else 0,
+        self._supervisor_split = panes
+        for key in ("assistant_pane", "cline_pane", "supervisor_pane"):
+            box = ttk.LabelFrame(
+                panes, text=key.replace("_pane", "").title()
             )
+            _add_pane(panes, box, SUPERVISOR_SPLIT_MIN_SIZE, weight=1)
             box.columnconfigure(0, weight=1)
             box.rowconfigure(0, weight=1)
             table = ttk.Treeview(
@@ -446,6 +671,7 @@ class MainWindow:
             table.column("value", width=260, anchor="w")
             table.grid(row=0, column=0, sticky="nsew")
             self._supervisor_panes[key] = table
+            self._supervisor_frames[key] = box
 
         instruction_row = ttk.Frame(frame)
         instruction_row.grid(row=3, column=0, sticky="ew", pady=(6, 0))
@@ -542,13 +768,27 @@ class MainWindow:
         side in one window** so their answers can be read against each other, and
         everything that is *shared* - merged evidence, conflicts, the judge, the
         advisory decision and the cost - sits below them.
+
+        Every one of those regions sits in a draggable splitter: question and
+        header on top, the advisor panes in the middle, the shared results and
+        the cost at the bottom. The three advisor panes are the panes of their
+        own horizontal splitter, so one advisor can be widened without touching
+        the other two.
         """
         frame = ttk.Frame(notebook, padding=6)
         frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(2, weight=3)
-        frame.rowconfigure(3, weight=3)
+        frame.rowconfigure(0, weight=1)
 
-        question_row = ttk.Frame(frame)
+        # -- the vertical splitter of the whole tab --------------------------
+        split = ttk.PanedWindow(frame, orient="vertical")
+        split.grid(row=0, column=0, sticky="nsew")
+        self._review_split = split
+
+        summary = ttk.Frame(split)
+        summary.columnconfigure(0, weight=1)
+        _add_pane(split, summary, REVIEW_SPLIT_MIN_SIZE, weight=0)
+
+        question_row = ttk.Frame(summary)
         question_row.grid(row=0, column=0, sticky="ew")
         question_row.columnconfigure(1, weight=1)
         ttk.Label(question_row, text="Review question:").grid(
@@ -568,9 +808,12 @@ class MainWindow:
             text="Required; sent verbatim to all three advisors.",
         ).grid(row=0, column=2, sticky="w")
 
-        header_frame = ttk.LabelFrame(frame, text="Review header", padding=(6, 4))
-        header_frame.grid(row=1, column=0, sticky="ew", pady=(6, 4))
+        header_frame = ttk.LabelFrame(
+            summary, text="Review header", padding=(6, 4)
+        )
+        header_frame.grid(row=1, column=0, sticky="nsew", pady=(6, 0))
         header_frame.columnconfigure(0, weight=1)
+        header_frame.rowconfigure(0, weight=1)
         self._review_header = self._table_in(
             header_frame,
             tuple(key for key, _h, _w in FACT_COLUMNS),
@@ -580,30 +823,47 @@ class MainWindow:
 
         # -- the three advisors, side by side ------------------------------
         panes_frame = ttk.LabelFrame(
-            frame,
+            split,
             text="Advisor responses (read-only, side by side)",
             padding=(6, 4),
         )
-        panes_frame.grid(row=2, column=0, sticky="nsew", pady=(0, 4))
         panes_frame.columnconfigure(0, weight=1)
         panes_frame.rowconfigure(0, weight=1)
-        self._panes_frame = ttk.Frame(panes_frame)
+        _add_pane(split, panes_frame, REVIEW_SPLIT_MIN_SIZE, weight=2)
+        # One horizontal splitter for the advisors: each pane is dragged on its
+        # own, so OpenAI can be widened without touching Claude or Grok.
+        self._panes_frame = ttk.PanedWindow(panes_frame, orient="horizontal")
         self._panes_frame.grid(row=0, column=0, sticky="nsew")
 
         # -- the shared results, below them --------------------------------
-        shared = ttk.Frame(frame)
-        shared.grid(row=3, column=0, sticky="nsew")
-        shared.columnconfigure(0, weight=1)
-        shared.columnconfigure(1, weight=1)
-        shared.rowconfigure(0, weight=1)
-        shared.rowconfigure(1, weight=1)
+        # The bottom region is a splitter of its own: the merged results above,
+        # the cost of the review below - each can be given the height it needs.
+        bottom = ttk.PanedWindow(split, orient="vertical")
+        _add_pane(split, bottom, REVIEW_SPLIT_MIN_SIZE, weight=2)
+        self._review_bottom_split = bottom
+
+        results = ttk.PanedWindow(bottom, orient="horizontal")
+        _add_pane(bottom, results, REVIEW_RESULT_SPLIT_MIN_SIZE, weight=3)
+        self._review_results_split = results
+
+        left = ttk.PanedWindow(results, orient="vertical")
+        _add_pane(
+            results, left, REVIEW_RESULT_SPLIT_MIN_SIZE, weight=1
+        )
+        right = ttk.PanedWindow(results, orient="vertical")
+        _add_pane(
+            results, right, REVIEW_RESULT_SPLIT_MIN_SIZE, weight=1
+        )
+        self._review_section_splits = [left, right]
 
         merged_frame = ttk.LabelFrame(
-            shared, text="Merged evidence", padding=(6, 4)
+            left, text="Merged evidence", padding=(6, 4)
         )
-        merged_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 4), pady=(0, 4))
         merged_frame.columnconfigure(0, weight=1)
         merged_frame.rowconfigure(0, weight=1)
+        _add_pane(
+            left, merged_frame, REVIEW_SECTION_SPLIT_MIN_SIZE, weight=1
+        )
         self._merged = self._table_in(
             merged_frame,
             tuple(key for key, _h, _w in FACT_COLUMNS),
@@ -611,23 +871,14 @@ class MainWindow:
             height=8,
         )
 
-        judge_frame = ttk.LabelFrame(
-            shared, text="Judge result (a separate layer)", padding=(6, 4)
-        )
-        judge_frame.grid(row=0, column=1, sticky="nsew", pady=(0, 4))
-        judge_frame.columnconfigure(0, weight=1)
-        judge_frame.rowconfigure(0, weight=1)
-        self._judge = scrolledtext.ScrolledText(
-            judge_frame, height=8, wrap="word"
-        )
-        self._judge.grid(row=0, column=0, sticky="nsew")
-        self._judge.configure(state="disabled")
-
         conflicts_frame = ttk.LabelFrame(
-            shared, text="Evidence conflicts", padding=(6, 4)
+            left, text="Evidence conflicts", padding=(6, 4)
         )
-        conflicts_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 4))
         conflicts_frame.columnconfigure(0, weight=1)
+        conflicts_frame.rowconfigure(0, weight=1)
+        _add_pane(
+            left, conflicts_frame, REVIEW_SECTION_SPLIT_MIN_SIZE, weight=1
+        )
         self._review_conflicts = self._table_in(
             conflicts_frame,
             tuple(key for key, _h, _w in CONFLICT_COLUMNS),
@@ -635,13 +886,30 @@ class MainWindow:
             height=4,
         )
 
+        judge_frame = ttk.LabelFrame(
+            right, text="Judge result (a separate layer)", padding=(6, 4)
+        )
+        judge_frame.columnconfigure(0, weight=1)
+        judge_frame.rowconfigure(0, weight=1)
+        _add_pane(
+            right, judge_frame, REVIEW_SECTION_SPLIT_MIN_SIZE, weight=1
+        )
+        self._judge = scrolledtext.ScrolledText(
+            judge_frame, height=8, wrap="word"
+        )
+        self._judge.grid(row=0, column=0, sticky="nsew")
+        self._judge.configure(state="disabled")
+
         decision_frame = ttk.LabelFrame(
-            shared, text="Advisory decision (explains, never overrides)",
+            right,
+            text="Advisory decision (explains, never overrides)",
             padding=(6, 4),
         )
-        decision_frame.grid(row=1, column=1, sticky="nsew")
         decision_frame.columnconfigure(0, weight=1)
         decision_frame.rowconfigure(0, weight=1)
+        _add_pane(
+            right, decision_frame, REVIEW_SECTION_SPLIT_MIN_SIZE, weight=1
+        )
         self._decision = scrolledtext.ScrolledText(
             decision_frame, height=7, wrap="word"
         )
@@ -649,10 +917,11 @@ class MainWindow:
         self._decision.configure(state="disabled")
 
         cost_frame = ttk.LabelFrame(
-            shared, text="Cost of this review", padding=(6, 4)
+            bottom, text="Cost of this review", padding=(6, 4)
         )
-        cost_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
+        _add_pane(bottom, cost_frame, REVIEW_RESULT_SPLIT_MIN_SIZE, weight=1)
         cost_frame.columnconfigure(0, weight=1)
+        cost_frame.rowconfigure(1, weight=1)
         ttk.Label(
             cost_frame,
             textvariable=self._var("review_total_cost"),
@@ -662,17 +931,17 @@ class MainWindow:
             cost_frame,
             tuple(key for key, _h, _w in COST_COLUMNS),
             columns=COST_COLUMNS,
-            height=5,
+            height=4,
             row=1,
         )
 
         ttk.Label(
             frame, textvariable=self._var("review_progress"), foreground="#a05000"
-        ).grid(row=4, column=0, sticky="w", pady=(4, 0))
+        ).grid(row=1, column=0, sticky="w", pady=(4, 0))
         ttk.Label(
             frame, textvariable=self._var("review_status"), wraplength=900,
             justify="left",
-        ).grid(row=5, column=0, sticky="ew")
+        ).grid(row=2, column=0, sticky="ew")
         notebook.add(frame, text="Architecture Review")
 
     def question_value(self) -> str:
@@ -691,8 +960,7 @@ class MainWindow:
         """
         frame = ttk.Frame(notebook, padding=6)
         frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(3, weight=2)
-        frame.rowconfigure(4, weight=3)
+        frame.rowconfigure(1, weight=1)
 
         requirement_row = ttk.Frame(frame)
         requirement_row.grid(row=0, column=0, sticky="ew")
@@ -723,27 +991,49 @@ class MainWindow:
             ),
         ).grid(row=0, column=2, sticky="w")
 
-        header_frame = ttk.LabelFrame(
-            frame, text="Proposal header", padding=(6, 4)
+        # -- the splitter between the summary and the detail ----------------
+        # The proposal *summary* (header, status, the facts and the evidence
+        # digest) and the proposal *detail* (the read-only architecture sections
+        # and the stored proposals) are two panes: either one can be given the
+        # room it needs, and the detail starts with the larger share.
+        proposal_split = ttk.PanedWindow(frame, orient="vertical")
+        proposal_split.grid(row=1, column=0, sticky="nsew", pady=(6, 4))
+        self._proposal_split = proposal_split
+
+        summary = ttk.Frame(proposal_split)
+        summary.columnconfigure(0, weight=1)
+        summary.rowconfigure(2, weight=1)
+        _add_pane(
+            proposal_split, summary, PROPOSAL_SPLIT_MIN_SIZE, weight=1
         )
-        header_frame.grid(row=1, column=0, sticky="ew", pady=(6, 4))
+
+        detail = ttk.Frame(proposal_split)
+        detail.columnconfigure(0, weight=1)
+        detail.rowconfigure(0, weight=1)
+        _add_pane(proposal_split, detail, PROPOSAL_SPLIT_MIN_SIZE, weight=2)
+
+        header_frame = ttk.LabelFrame(
+            summary, text="Proposal header", padding=(6, 4)
+        )
+        header_frame.grid(row=0, column=0, sticky="nsew")
         header_frame.columnconfigure(0, weight=1)
+        header_frame.rowconfigure(0, weight=1)
         self._proposal_header = self._table_in(
             header_frame,
             tuple(key for key, _h, _w in FACT_COLUMNS),
             columns=FACT_COLUMNS,
-            height=13,
+            height=10,
         )
 
         ttk.Label(
-            frame,
+            summary,
             textvariable=self._var("proposal_status"),
             wraplength=900,
             justify="left",
-        ).grid(row=2, column=0, sticky="ew", pady=(0, 4))
+        ).grid(row=1, column=0, sticky="ew", pady=(0, 4))
 
-        top = ttk.Frame(frame)
-        top.grid(row=3, column=0, sticky="nsew")
+        top = ttk.Frame(summary)
+        top.grid(row=2, column=0, sticky="nsew")
         top.columnconfigure(0, weight=1)
         top.columnconfigure(1, weight=1)
         top.rowconfigure(0, weight=1)
@@ -778,9 +1068,9 @@ class MainWindow:
 
         # -- the proposed architecture, read-only --------------------------
         sections_frame = ttk.LabelFrame(
-            frame, text="Proposed architecture (read-only)", padding=(6, 4)
+            detail, text="Proposed architecture (read-only)", padding=(6, 4)
         )
-        sections_frame.grid(row=4, column=0, sticky="nsew", pady=(0, 4))
+        sections_frame.grid(row=0, column=0, sticky="nsew")
         sections_frame.columnconfigure(0, weight=1)
         sections_frame.rowconfigure(0, weight=1)
         sections = ttk.Notebook(sections_frame)
@@ -812,7 +1102,7 @@ class MainWindow:
             text="Revision feedback (required to request a revision)",
             padding=(6, 4),
         )
-        feedback_frame.grid(row=5, column=0, sticky="ew", pady=(0, 4))
+        feedback_frame.grid(row=2, column=0, sticky="ew", pady=(0, 4))
         feedback_frame.columnconfigure(0, weight=1)
         self._revision_feedback_field = tk.Text(
             feedback_frame, height=3, wrap="word"
@@ -831,14 +1121,14 @@ class MainWindow:
             wraplength=900,
             foreground="#a05000",
             justify="left",
-        ).grid(row=6, column=0, sticky="ew", pady=(0, 4))
+        ).grid(row=3, column=0, sticky="ew", pady=(0, 4))
 
         history_frame = ttk.LabelFrame(
-            frame,
+            detail,
             text="Stored proposals (newest first - history is never rewritten)",
             padding=(6, 4),
         )
-        history_frame.grid(row=7, column=0, sticky="nsew")
+        history_frame.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
         history_frame.columnconfigure(0, weight=1)
         history_frame.rowconfigure(0, weight=1)
         self._proposal_history = self._table_in(
@@ -873,25 +1163,28 @@ class MainWindow:
         """
         if len(self._panes) != len(panels):
             for pane in self._panes:
+                if pane["frame"] in self._panes_frame.panes():
+                    self._panes_frame.forget(pane["frame"])
                 pane["frame"].destroy()
-            self._panes = []
-            for index in range(len(panels)):
-                self._panes.append(self._build_pane(index))
-            for index in range(len(panels)):
-                self._panes_frame.columnconfigure(index, weight=1)
-                self._panes_frame.rowconfigure(0, weight=1)
+            self._panes = [
+                self._build_pane(index) for index in range(len(panels))
+            ]
+            if self._placed_splits:
+                # The window already started the splitters; a rebuilt one gets
+                # the same even start (thirds for three advisors).
+                self._place_advisor_start()
         for pane, panel in zip(self._panes, panels):
             self._fill_pane(pane, panel)
 
     def _build_pane(self, index: int) -> dict[str, Any]:
-        """One read-only advisor pane: a status line, its facts and its text."""
+        """One read-only advisor pane: a status line, its facts and its text.
+
+        The pane is added to the horizontal advisor splitter, one weight each,
+        so all advisors start equally wide and every sash between them can be
+        dragged on its own.
+        """
         pane = ttk.LabelFrame(self._panes_frame, text="Advisor", padding=(6, 4))
-        pane.grid(
-            row=0,
-            column=index,
-            sticky="nsew",
-            padx=(0 if index == 0 else 4, 0),
-        )
+        _add_pane(self._panes_frame, pane, ADVISOR_SPLIT_MIN_SIZE, weight=1)
         pane.columnconfigure(0, weight=1)
         pane.rowconfigure(1, weight=2)
         pane.rowconfigure(2, weight=3)
@@ -959,7 +1252,7 @@ class MainWindow:
 
     def _build_status(self) -> None:
         bar = ttk.Frame(self._root, padding=(8, 4))
-        bar.grid(row=5, column=0, sticky="ew")
+        bar.grid(row=1, column=0, sticky="ew")
         bar.columnconfigure(0, weight=1)
         ttk.Label(bar, textvariable=self._var("status"), anchor="w").grid(
             row=0, column=0, sticky="ew"
@@ -967,6 +1260,306 @@ class MainWindow:
         ttk.Label(
             bar, textvariable=self._var("status_extra"), anchor="e"
         ).grid(row=0, column=1, sticky="e")
+
+    # -- the remembered layout ---------------------------------------------
+
+    def _register_splits(self) -> None:
+        """Name every splitter once, after every tab has been built.
+
+        The names (see ``SPLIT_KEYS``) are the vocabulary of the remembered
+        layout: the host stores one sash list per name and reads it back by name
+        on the next start, so a saved position never depends on a widget path
+        (which differs on every run) or on a build order.
+        """
+        self._splits = {
+            "main": self._main_split,
+            "review": self._review_split,
+            "review_advisors": self._panes_frame,
+            "review_results": self._review_results_split,
+            "review_bottom": self._review_bottom_split,
+            "supervisor": self._supervisor_split,
+            "proposal": self._proposal_split,
+        }
+        for key, split in zip(
+            ("review_merged", "review_judge"), self._review_section_splits
+        ):
+            self._splits[key] = split
+
+    def _restore_saved_tab(self) -> None:
+        """Open the tab that was open when the layout was saved, if it exists."""
+        title = self._layout.get("tab")
+        if isinstance(title, str) and title:
+            self.select_tab(title)
+
+    def _saved_sashes(self, key: str, split: Any) -> tuple[int, ...]:
+        """The remembered sash positions for one splitter, when they still fit.
+
+        A remembered layout may come from a run in which this splitter had a
+        different number of panes (the advisor panes follow the configured
+        advisors, for instance). Positions are therefore used only when their
+        count matches this splitter exactly; one that no longer fits keeps the
+        default start instead of a shape Tk would misread. Anything that is not
+        a positive integer is refused too - Tk is never handed a value that came
+        from the file.
+        """
+        positions = self._layout.get("sashes")
+        if not isinstance(positions, Mapping):
+            return ()
+        values = positions.get(key)
+        if isinstance(values, (str, bytes)) or not isinstance(
+            values, Sequence
+        ):
+            return ()
+        count = len(split.panes()) - 1
+        if count < 1 or len(values) != count:
+            return ()
+        clean: list[int] = []
+        for value in values:
+            if isinstance(value, bool) or not isinstance(value, int):
+                return ()
+            if value <= 0:
+                return ()
+            clean.append(int(value))
+        return tuple(clean)
+
+    def layout_snapshot(self) -> dict[str, Any]:
+        """The layout as it is right now: window geometry, open tab, sashes.
+
+        This is what the host writes to the layout file - a *snapshot*, never
+        state: the caller may throw it away, and nothing here reads it back.
+        Only geometry Tk has actually delivered is captured, so a splitter whose
+        tab was never opened contributes its remembered positions (or nothing at
+        all) instead of a meaningless zero. Every read is guarded, so a snapshot
+        can never raise into the close path.
+        """
+        sashes: dict[str, list[int]] = {}
+        for key, split in self._splits.items():
+            positions = self._sash_positions(split) or self._saved_sashes(
+                key, split
+            )
+            if positions:
+                sashes[key] = list(positions)
+        return {
+            "geometry": self._current_geometry(),
+            "tab": self._current_tab(),
+            "sashes": sashes,
+        }
+
+    def _current_geometry(self) -> str:
+        """The window's own geometry string, or ``""`` when Tk cannot answer."""
+        try:
+            return str(self._root.winfo_geometry())
+        except tk.TclError:
+            return ""
+
+    def _current_tab(self) -> str:
+        """The title of the open tab, or ``""`` when there is none."""
+        if self._notebook is None:
+            return ""
+        try:
+            return str(self._notebook.tab(self._notebook.select(), "text"))
+        except tk.TclError:
+            return ""
+
+    def _sash_positions(self, split: Any) -> tuple[int, ...]:
+        """One splitter's live sash positions, or ``()`` when it has none yet.
+
+        A splitter that has never been laid out reports no size and no positive
+        sash, and saving that would restore a collapsed region, so an unmeasured
+        splitter is left out of the snapshot. Whether the widget is *mapped* is
+        deliberately not part of the test: a splitter inside a tab that is not
+        the open one keeps the size and the sashes it was last given, which is
+        exactly what the operator expects to find again.
+        """
+        if split is None:
+            return ()
+        try:
+            count = len(split.panes()) - 1
+            if split.winfo_width() <= 1 or split.winfo_height() <= 1:
+                return ()
+            positions = tuple(
+                int(split.sashpos(index)) for index in range(count)
+            )
+        except (tk.TclError, TypeError, ValueError):
+            return ()
+        if count < 1 or any(position <= 0 for position in positions):
+            return ()
+        return positions
+
+    def select_tab(self, title: str) -> bool:
+        """Open the tab with this title; ``False`` when there is no such tab."""
+        if self._notebook is None:
+            return False
+        try:
+            for tab in self._notebook.tabs():
+                if str(self._notebook.tab(tab, "text")) == title:
+                    self._notebook.select(tab)
+                    return True
+        except tk.TclError:
+            return False
+        return False
+
+    def place_window(
+        self,
+        width: int,
+        height: int,
+        x: Optional[int] = None,
+        y: Optional[int] = None,
+    ) -> None:
+        """Give the window a remembered size and position that fit this screen.
+
+        Called while the widgets exist but before the window is mapped, so Tk
+        creates it there and the remembered sash positions are later placed at
+        the size they were measured at. A position that would leave almost none
+        of the panel on screen is dropped and the size alone is kept: a stale
+        preference must never be able to hide the window it belongs to.
+        """
+        try:
+            screen_width = int(self._root.winfo_screenwidth())
+            screen_height = int(self._root.winfo_screenheight())
+        except tk.TclError:  # pragma: no cover - Tk always knows its screen
+            return
+        width = min(int(width), screen_width)
+        height = min(int(height), screen_height)
+        if x is None or y is None:
+            x = y = None
+        elif not (
+            -width + MIN_ON_SCREEN_EDGE
+            <= x
+            <= screen_width - MIN_ON_SCREEN_EDGE
+            and 0 <= y <= screen_height - MIN_ON_SCREEN_EDGE
+        ):
+            x = y = None
+        spec = f"{width}x{height}"
+        if x is not None and y is not None:
+            spec = f"{spec}{x:+d}{y:+d}"
+        try:
+            self._root.geometry(spec)
+        except tk.TclError:  # pragma: no cover - Tk accepts its own format
+            return
+
+    # -- the starting sash positions ---------------------------------------
+
+    def _place_split_start(
+        self,
+        key: str,
+        start: Callable[[int], tuple[int, ...]],
+        minimum: int,
+    ) -> None:
+        """Give one named splitter its starting sash positions, once laid out.
+
+        Tk's ``ttk::panedwindow`` computes its first layout from the panes'
+        *requested* sizes, so a region whose content asks for more room than the
+        window has would start squeezed to a few pixels and would have to be
+        dragged open on every launch. The start - or the remembered positions,
+        which win over it - is therefore placed on the split's first
+        ``<Configure>``, after Tk's own arrange and through ``after_idle``. From
+        then on the sashes belong to the operator: the only thing ever placed
+        again is a *remembered* position, and only until the operator drags that
+        splitter himself (see :meth:`_start_split`).
+        """
+        split = self._splits.get(key)
+        if split is None:
+            return
+        split.bind(
+            "<Configure>",
+            lambda _event, s=split, k=key: s.after_idle(
+                lambda: self._start_split(k, s, start, minimum)
+            ),
+            add="+",
+        )
+        # One drag of a sash is the operator taking that splitter over by hand.
+        split.bind(
+            "<ButtonRelease-1>",
+            lambda _event, k=key: self._on_split_drag(k),
+            add="+",
+        )
+
+    def _on_split_drag(self, key: str) -> None:
+        """Note that the operator has resized this splitter by hand.
+
+        Only a *drag* counts, and it is not undone: once the operator has moved
+        a sash, that splitter belongs to Tk for the rest of the session and the
+        remembered position is never placed over it again.
+        """
+        self._operator_splits.add(key)
+
+    def _start_split(
+        self,
+        key: str,
+        split: Any,
+        start: Callable[[int], tuple[int, ...]],
+        minimum: int,
+    ) -> None:
+        """Place one split's start once, then keep a remembered layout honest.
+
+        The first call places the start (the remembered positions when there are
+        any, the default otherwise). Later calls only matter for a splitter with
+        a remembered layout: Tk lays a tab that has not been shown before out at
+        a smaller size first, and a window resize re-arranges the panes
+        proportionally, so a remembered position that was placed only once would
+        come back clamped or drifted. The operator's own positions are therefore
+        re-placed until the operator drags that splitter - after which Tk owns
+        it, exactly as in a session that started without a saved layout.
+        """
+        marker = str(split)
+        horizontal = str(split.cget("orient")) == "horizontal"
+        total = split.winfo_width() if horizontal else split.winfo_height()
+        if total <= 1:
+            return  # not laid out yet: the next <Configure> tries again
+        saved = self._saved_sashes(key, split)
+        if marker not in self._placed_splits:
+            self._placed_splits.add(marker)
+            self._place_sashes(split, saved or start(total), minimum)
+            return
+        if saved and key not in self._operator_splits:
+            self._place_sashes(split, saved, minimum)
+
+    def _place_sashes(
+        self, split: Any, positions: Any, minimum: int
+    ) -> None:
+        """Apply sash positions and then enforce the pane floors.
+
+        Tk decides what a sash position may be, so a value it refuses ends the
+        placement instead of escaping as an error: an impossible layout costs
+        the operator the rest of that splitter's positions, never the panel.
+        """
+        for index, position in enumerate(positions):
+            if index >= len(split.panes()) - 1:
+                break
+            try:
+                split.sashpos(index, int(position))
+            except (tk.TclError, TypeError, ValueError):
+                break
+        _clamp_split(split, minimum)
+
+    def _advisor_sashes(self, total: int) -> tuple[int, ...]:
+        """Whatever the number of advisors, they start equally wide."""
+        count = max(1, len(self._panes))
+        return tuple(int(total * fraction) for fraction in _even_sashes(count))
+
+    def _main_split_start(self, total: int) -> tuple[int, ...]:
+        """The work area keeps its natural height, capped so the tabs stay larger.
+
+        Without the cap a small window would be mostly buttons; with it the
+        notebook always owns most of the height, at any window size.
+        """
+        return (
+            min(
+                self._top_area.winfo_reqheight(),
+                int(total * MAIN_SPLIT_TOP_START_SHARE),
+            ),
+        )
+
+    def _place_advisor_start(self) -> None:
+        """(Re)start the advisor splitter evenly after its panes were rebuilt."""
+        self._placed_splits.discard(str(self._panes_frame))
+        self._start_split(
+            "review_advisors",
+            self._panes_frame,
+            self._advisor_sashes,
+            ADVISOR_SPLIT_MIN_SIZE,
+        )
 
     # -- rendering ---------------------------------------------------------
 
@@ -1092,6 +1685,11 @@ class MainWindow:
         )
         for key, table in self._supervisor_panes.items():
             pane = supervisor.get(key) or {}
+            frame = self._supervisor_frames.get(key)
+            title = str(pane.get("title") or "")
+            if frame is not None and title and frame.cget("text") != title:
+                # the pane title is the controller's name for that pane
+                frame.configure(text=title)
             table.delete(*table.get_children())
             for row in tuple(pane.get("rows") or ()):
                 table.insert("", "end", values=tuple(row)[:2])

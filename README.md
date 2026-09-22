@@ -354,12 +354,13 @@ python -m pytest -q
 `pyproject.toml` already configures `testpaths = ["tests"]` and
 `pythonpath = ["src"]`, so the suite runs without installing the package first.
 
-**Runtime locations** (both are ignored by `.gitignore`):
+**Runtime locations** (all ignored by `.gitignore`):
 
 | Path | Purpose |
 | --- | --- |
 | `data/architecture_assistant.db` | SQLite source of truth |
 | `data/cline/` | Cline file channel (`to_cline/`, `context/`, `from_cline/`, `from_cline/archive/`) |
+| `data/gui_layout.json` | the operator panel's remembered window layout (a local preference) |
 | `reports/` | Excel and Markdown artifacts |
 
 **Driving the loop.** v1.0 has no CLI by design (see limitations). The operator
@@ -413,6 +414,18 @@ python -m architecture_assistant_gui --database data/youtube_to_mp3.db \
     --project-name youtube_to_mp3 --plan-version 1.0 --mode MANUAL --actor gints
 ```
 
+On Windows, **START_ARCHITECTURE_ASSISTANT.bat** in the project root does the
+same thing for a double-click: it works from its own directory (`%~dp0`), puts
+`src` on `PYTHONPATH`, finds a usable Python (preferring `py -3.13`, then `py -3`,
+`python`, `python3`; only an interpreter that is 3.11+, has tkinter and can
+import the panel is accepted), starts the panel **without a console window** and
+closes itself, so nothing is left open. Anything it cannot start is reported in
+its own window, which then waits for a key press, and the panel's own startup
+output is kept in `%TEMP%\architecture_assistant_gui_launch.log`.
+**START_ARCHITECTURE_ASSISTANT_CONSOLE.bat** is the same launcher with the console
+kept open for logs and debugging. Arguments are forwarded, so
+`START_ARCHITECTURE_ASSISTANT.bat --supervision` opens the panel with supervision.
+
 Supervision is the panel's one **opt-in** switch; without it the panel behaves
 exactly as it did before supervision existed:
 
@@ -438,6 +451,35 @@ The tab is laid out for comparison, in one window (never extra OS windows):
   the judge result, the advisory decision (marked *explains, never overrides*)
   and the cost of the review, with the total in one bold line and one row per
   advisor plus the judge.
+
+Every region is a **draggable pane** rather than a fixed layout: the split
+between the work area and the tab notebook, the split inside the review tab
+between the question/header, the advisor panes and the shared results, the split
+between the three advisor panes themselves (so one advisor can be widened
+without touching the other two), the split between merged evidence/conflicts and
+the judge/advisory decision, the one between the results and the cost, the one
+between the proposal summary and the proposal detail, and the three panes of the
+Supervisor tab. Each splitter starts at a sensible position - the three advisors
+and the three supervisor panes each get a third, the notebook keeps most of the
+window height - and each pane has a floor, so a drag can never collapse a region
+to nothing.
+
+Where the operator put those panes is **remembered**, so the panel comes back the
+way it was left: on a normal close the window's size and position, the sash
+position of every splitter and the tab that was open are written to one small
+JSON file (`data/gui_layout.json`, ignored by Git, in a file of its own so it can
+never overwrite the remembered operator name), and the next start applies the
+geometry before the window is mapped and each remembered sash once that splitter
+has a real size - kept there while the panels settle, and until the operator
+drags that splitter himself, after which it belongs to the window again. The
+saved layout is a **local preference and nothing else**: numbers plus one tab
+title - no operator name, no path, no project or step, no secret - and nothing
+about it is stored in the database. Every way the file can be wrong costs
+the operator the broken part and no more: an unknown version, a wrong type or an
+impossible value is dropped, a sash that would collapse a pane stops at that
+pane's floor, a remembered window position that is not on this screen is dropped
+(the size is kept), and a missing or corrupt file simply means the default
+layout - the panel always starts.
 
 Above the panes sit the review header (project, **configured `source_root`**,
 current step, architecture version, fresh deterministic gate status) and the
@@ -733,6 +775,7 @@ artifact, no supervision audit entry - while the enabled path stays unchanged.
 Architecture_assistant/
 ├── pyproject.toml                 packaging, pytest configuration
 ├── .gitignore                     ignores caches, .mini_build/, data/, reports/, *.db
+│                                  (and data/gui_layout.json explicitly)
 ├── README.md                      this document
 ├── src/
 │   ├── architecture_assistant/      the frozen core (the scanned tree)
@@ -764,6 +807,7 @@ Architecture_assistant/
 │       ├── core.py                core-thread worker + background runner
 │       ├── controller.py          UI state machine + button matrix
 │       ├── views.py               Tk widgets (layout and rendering only)
+│       ├── layout.py              the remembered window layout (one JSON file)
 │       ├── app.py                 window, dialogs, plan preview, result pump
 │       └── __main__.py            python -m architecture_assistant_gui
 ├── examples/
@@ -790,6 +834,8 @@ Architecture_assistant/
     ├── test_supervisor_runtime.py   the cheap tick, malformed deadlines, send protocol
     ├── test_supervisor_policy.py    the deterministic send allowlist and denylist
     ├── test_gui_logs.py        the log-event contract and the Logs tab
+    ├── test_gui_layout.py      the draggable panes and the layout that is restored
+    ├── test_gui_layout_store.py  the layout file: what it stores and what it refuses
     ├── test_gui_boundaries.py  test_gui_core.py  test_gui_controller.py
     ├── test_cline_worker.py  test_composition.py
     ├── test_recovery.py           crash/restart recovery suite
@@ -797,7 +843,9 @@ Architecture_assistant/
 ```
 
 `.mini_build/` is the build controller's own working area and is not part of the
-product; `data/` and `reports/` are created at runtime and are ignored by Git.
+product; `data/` and `reports/` are created at runtime and are ignored by Git -
+including `data/gui_layout.json`, the panel's remembered window layout, which is
+a local preference and never repository state.
 
 ---
 

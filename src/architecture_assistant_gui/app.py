@@ -8,6 +8,11 @@ The application owns three things and nothing else:
   view. It never calls the workflow by itself: only an operator command starts
   a loop run, and ``after()`` polls the result queue, never the assistant.
 
+It also owns the panel's two *local preferences* - the remembered operator name
+and the remembered window layout - which are read and written only here: no
+widget opens a file, neither preference ever reaches the database, and a missing
+or damaged preference file costs the operator a default and nothing else.
+
 Tkinter is imported lazily so that :func:`main` can report a missing Tk
 installation cleanly, and so that the package can be imported on a machine
 without a display.
@@ -31,8 +36,15 @@ from architecture_assistant.domain.enums import Mode
 
 from .controller import PROPOSAL_INTENTS, GuiController
 from .core import BackgroundRunner, CoreWorker
+from .layout import (
+    DEFAULT_LAYOUT_PATH,
+    load_layout,
+    parse_geometry,
+    save_layout,
+)
 
 __all__ = [
+    "LAYOUT_PATH",
     "POLL_INTERVAL_MS",
     "PLAN_FILE_TYPES",
     "SETTINGS_PATH",
@@ -63,6 +75,14 @@ PLAN_FILE_TYPES: tuple[tuple[str, str], ...] = (
 #: Where the remembered operator name lives. A GUI-local preference, never
 #: domain state and never part of the assistant's database.
 SETTINGS_PATH: Path = Path.home() / ".architecture_assistant_gui.json"
+
+#: Where the remembered window layout lives. A local preference as well, but in
+#: a file of its own: the assistant's runtime ``data/`` directory is the natural
+#: home for a host's own runtime data (it is ignored by Git, like the default
+#: database beside it), and a separate file means the layout and the remembered
+#: operator name can never overwrite each other. Nothing about the layout is
+#: ever written to the database - see :mod:`architecture_assistant_gui.layout`.
+LAYOUT_PATH: Path = DEFAULT_LAYOUT_PATH
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -197,6 +217,7 @@ class GuiApp:
         *,
         actor: str = "",
         interval_ms: int = POLL_INTERVAL_MS,
+        layout_path: Optional[Path] = None,
     ) -> None:
         if not isinstance(config, CompositionConfig):
             raise ValueError(
@@ -210,6 +231,12 @@ class GuiApp:
             raise ValueError(
                 f"interval_ms must be an int >= 1; got {interval_ms!r}"
             )
+        if layout_path is not None and not isinstance(
+            layout_path, (str, os.PathLike)
+        ):
+            raise ValueError(
+                f"layout_path must be a path or None; got {layout_path!r}"
+            )
         self._config = config
         self._worker = CoreWorker(config)
         self._runner = BackgroundRunner(self._worker)
@@ -222,6 +249,12 @@ class GuiApp:
         self._root: Any = None
         self._window: Any = None
         self._interval = interval_ms
+        #: Where the window layout is remembered (never the database).
+        self._layout_path = (
+            Path(layout_path) if layout_path is not None else LAYOUT_PATH
+        )
+        #: The layout that was loaded on startup; empty means "use the defaults".
+        self._layout: dict[str, Any] = {}
         #: When the next supervision tick is due (monotonic seconds). The runtime
         #: owns no thread, so the panel is its clock; nothing is submitted until
         #: supervision is configured.
@@ -245,6 +278,9 @@ class GuiApp:
 
         from .views import MainWindow
 
+        # The remembered layout is read once, before the window exists: a file
+        # that is missing or damaged simply means the default layout.
+        self._load_layout()
         root = tk.Tk()
         self._root = root
         self._window = MainWindow(
@@ -256,13 +292,53 @@ class GuiApp:
             on_proposal_requirement=self._on_proposal_requirement,
             on_revision_feedback=self._on_revision_feedback,
             on_instruction=self._on_instruction,
+            layout=self._layout,
         )
+        # The toplevel belongs to the application, so its geometry is applied
+        # here - before the window is mapped, so the splitters place their
+        # remembered sashes at the size they were measured at.
+        self._apply_saved_geometry()
         root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._runner.start()
         self._render()
         root.after(self._interval, self._pump)
         root.mainloop()
         return 0
+
+    # -- the remembered window layout --------------------------------------
+
+    def _load_layout(self) -> None:
+        """Read the remembered layout; never fatal, never partial state."""
+        self._layout = load_layout(self._layout_path)
+
+    def _apply_saved_geometry(self) -> None:
+        """Give the window the remembered size and position, when it has one.
+
+        Only the *numbers* are handed to the window, which decides what fits the
+        screen: an off-screen or impossible geometry costs the operator the
+        position (or the whole geometry) and nothing else.
+        """
+        if self._window is None:
+            return
+        parsed = parse_geometry(self._layout.get("geometry"))
+        if parsed is None:
+            return
+        self._window.place_window(*parsed)
+
+    def _remember_layout(self) -> None:
+        """Write the operator's current layout - a local preference, not state.
+
+        Called while the window still exists (its geometry is read from it) and
+        guarded end to end: nothing about remembering a layout may keep the
+        panel from closing.
+        """
+        if self._window is None:
+            return
+        try:
+            snapshot = self._window.layout_snapshot()
+        except BaseException:  # noqa: BLE001 - a preference never blocks a close
+            return
+        save_layout(self._layout_path, snapshot)
 
     def _pump(self) -> None:
         """Drain finished core results - the queue, never the workflow."""
@@ -318,7 +394,13 @@ class GuiApp:
             self._window.render(self._controller.view_model())
 
     def _on_close(self) -> None:
-        """Stop the core thread (closing the composition there), then close."""
+        """Remember the operator's layout, stop the core thread, then close.
+
+        The layout is written while the window still exists - the geometry comes
+        from the window itself - and before the core thread is stopped, so a
+        slow shutdown can never lose it.
+        """
+        self._remember_layout()
         self._runner.stop()
         if self._root is not None:
             self._root.destroy()
