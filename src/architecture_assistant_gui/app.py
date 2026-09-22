@@ -34,7 +34,14 @@ from architecture_assistant.composition import (
 )
 from architecture_assistant.domain.enums import Mode
 
-from .controller import PROPOSAL_INTENTS, GuiController
+from .controller import (
+    CLEAR_LOGS_INTENT,
+    POPUP_INTENTS,
+    PROPOSAL_INTENTS,
+    PROVIDER_SETTINGS_INTENTS,
+    SAVE_SETTINGS_INTENT,
+    GuiController,
+)
 from .core import BackgroundRunner, CoreWorker
 from .layout import (
     DEFAULT_LAYOUT_PATH,
@@ -42,6 +49,7 @@ from .layout import (
     parse_geometry,
     save_layout,
 )
+from .windows import open_popup
 
 __all__ = [
     "LAYOUT_PATH",
@@ -208,6 +216,34 @@ def save_actor(actor: str) -> None:
         pass
 
 
+def _window_exists(window: Any) -> bool:
+    """Whether a Tk window is still alive - ``False`` for ``None`` or a corpse.
+
+    The popup registry holds windows the operator may have closed with the window
+    manager, so every lookup has to ask the widget itself. Anything that cannot
+    answer is treated as gone.
+    """
+    if window is None:
+        return False
+    try:
+        return bool(window.winfo_exists())
+    except BaseException:  # noqa: BLE001 - a destroyed window answers nothing
+        return False
+
+
+def _save_succeeded(result: Any) -> bool:
+    """Whether one finished job was a provider-settings save that landed.
+
+    A failed save is not a success: the panel must keep the typed key and say so
+    rather than pretending the configuration was remembered.
+    """
+    payload = getattr(result, "payload", None)
+    if not isinstance(payload, Mapping):
+        return False
+    outcome = payload.get("settings")
+    return isinstance(outcome, Mapping) and bool(outcome.get("saved"))
+
+
 class GuiApp:
     """The Tk application: window, dialogs and the result pump."""
 
@@ -255,6 +291,14 @@ class GuiApp:
         )
         #: The layout that was loaded on startup; empty means "use the defaults".
         self._layout: dict[str, Any] = {}
+        #: The popup windows that are open right now, by title. A second click on
+        #: a button whose window is already open raises that window instead of
+        #: opening a duplicate.
+        self._popups: dict[str, Any] = {}
+        #: The geometry of the popups that have been closed in this session. The
+        #: live geometry of the open ones is read from the windows themselves when
+        #: the layout is written, so both halves end up in the same preference.
+        self._popup_geometry: dict[str, str] = {}
         #: When the next supervision tick is due (monotonic seconds). The runtime
         #: owns no thread, so the panel is its clock; nothing is submitted until
         #: supervision is configured.
@@ -288,7 +332,6 @@ class GuiApp:
             on_action=self._on_action,
             on_actor=self._on_actor,
             on_question=self._on_question,
-            on_clear_logs=self._on_clear_logs,
             on_proposal_requirement=self._on_proposal_requirement,
             on_revision_feedback=self._on_revision_feedback,
             on_instruction=self._on_instruction,
@@ -335,10 +378,30 @@ class GuiApp:
         if self._window is None:
             return
         try:
-            snapshot = self._window.layout_snapshot()
+            snapshot = dict(self._window.layout_snapshot())
         except BaseException:  # noqa: BLE001 - a preference never blocks a close
             return
+        # The popup windows are remembered by *title*, next to the main window's
+        # own geometry: a popup that is still open contributes where it is now, a
+        # popup that was closed earlier contributes where it was left. Neither is
+        # domain state - it is a preference, and `save_layout` validates it.
+        windows = {**self._popup_geometry, **self._open_popup_geometry()}
+        if windows:
+            snapshot["windows"] = windows
         save_layout(self._layout_path, snapshot)
+
+    def _open_popup_geometry(self) -> dict[str, str]:
+        """The live geometry of every popup that is still on screen."""
+        geometry: dict[str, str] = {}
+        for title, window in self._popups.items():
+            if not _window_exists(window):
+                continue
+            try:
+                geometry[title] = str(window.winfo_geometry())
+            except BaseException:  # noqa: BLE001 - a preference, never a failure
+                continue
+        return geometry
+
 
     def _pump(self) -> None:
         """Drain finished core results - the queue, never the workflow."""
@@ -349,6 +412,7 @@ class GuiApp:
         results = self._runner.poll()
         opened = False
         previewed = False
+        saved = False
         for result in results:
             self._controller.apply_result(result)
             if result.error is not None:
@@ -357,6 +421,12 @@ class GuiApp:
                 opened = True
             elif result.label == "load_plan":
                 previewed = True
+            elif result.label == SAVE_SETTINGS_INTENT and _save_succeeded(result):
+                saved = True
+        if saved and self._window is not None:
+            # The key is stored now: empty every entry so no secret stays typed
+            # in a widget. The render below then shows "key: stored".
+            self._window.clear_key_entries()
         if results:
             self._render()
         if opened:
@@ -423,6 +493,14 @@ class GuiApp:
                 "Monitor snapshot", self._controller.snapshot_json()
             )
             return
+        if key == CLEAR_LOGS_INTENT:
+            # Empties the *view*: the runtime buffer holds nothing that was not
+            # already written to the persistent audit trail.
+            self._on_clear_logs()
+            return
+        if key in POPUP_INTENTS:
+            self._open_popup(key)
+            return
         if key == "open_reports_folder":
             self._open_folder()
             self._render()
@@ -447,6 +525,14 @@ class GuiApp:
                 self._controller.set_revision_feedback(
                     self._window.revision_feedback_value()
                 )
+        if key in PROVIDER_SETTINGS_INTENTS:
+            # The pane headers are the operator's input: read them first, so a
+            # click without a focus-out can never test or save a stale provider,
+            # model or key. A blank key entry means "keep the stored one".
+            if self._window is not None:
+                self._controller.set_provider_selection(
+                    self._window.provider_settings_values()
+                )
 
         reason = ""
         if intent.human:
@@ -468,6 +554,67 @@ class GuiApp:
 
         self._controller.submit(key, reason=reason)
         self._render()
+
+    def _open_popup(self, key: str) -> None:
+        """Open the window one display action stands for, from the last payload.
+
+        The application - never a widget - owns this: the spec comes from the
+        controller, the geometry from the same layout preference file as the main
+        window, and the window itself from :mod:`architecture_assistant_gui.windows`.
+        A button whose window is already open raises that window instead of
+        opening a second one.
+        """
+        if self._root is None:
+            return
+        spec = self._controller.popup_view(key)
+        if not spec:
+            # An honest dead end rather than an empty window: this is a display
+            # action, so it can never be the reason a panel does anything else.
+            self._controller.log(f"{key}: nothing to show in a window yet.")
+            self._render()
+            return
+        title = str(spec.get("title") or "Details")
+        existing = self._popups.get(title)
+        if _window_exists(existing):
+            existing.deiconify()
+            existing.lift()
+            existing.focus_set()
+            return
+        window = open_popup(
+            self._root,
+            spec,
+            geometry=self._saved_popup_geometry(title),
+            on_close=lambda open_window, name=title: self._remember_popup(
+                name, open_window
+            ),
+            on_action=self._on_action,
+        )
+        self._popups[title] = window
+
+    def _saved_popup_geometry(self, title: str) -> str:
+        """The remembered geometry of one popup, or ``""`` for the default.
+
+        The value is re-validated here - it came from a file the operator can
+        edit - so a damaged preference costs a popup its position, never its
+        usability.
+        """
+        windows = self._layout.get("windows")
+        if not isinstance(windows, Mapping):
+            return ""
+        parsed = parse_geometry(windows.get(title))
+        if parsed is None:
+            return ""
+        return str(windows.get(title) or "")
+
+    def _remember_popup(self, title: str, window: Any) -> None:
+        """Keep one popup's geometry *before* it is destroyed (never fatal)."""
+        try:
+            geometry = str(window.winfo_geometry())
+        except BaseException:  # noqa: BLE001 - a preference never blocks a close
+            return
+        if geometry:
+            self._popup_geometry[title] = geometry
+        self._popups.pop(title, None)
 
     def _ask_reason(self, intent: Any) -> Optional[str]:
         """Ask for the reason; ``None`` means "cancelled, send nothing"."""

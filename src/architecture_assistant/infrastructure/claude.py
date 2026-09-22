@@ -64,7 +64,12 @@ from typing import Any, Callable, Mapping, Optional, Sequence
 
 from ..domain.enums import Severity
 from ..domain.models import Finding, utc_now
-from ..ports.capabilities import AdvisorQuery, CostPort, CostRecord
+from ..ports.capabilities import (
+    AdvisorQuery,
+    ConnectionStatus,
+    CostPort,
+    CostRecord,
+)
 from ._http import (
     DEFAULT_BACKOFF_SCHEDULE,
     DEFAULT_MAX_RETRIES,
@@ -75,6 +80,7 @@ from ._http import (
     HttpResponse,
     HttpTransportError,
     ModelPrice,
+    _classify_connection_status,
     _cost_event_id,
     _excerpt,
     _finding_id,
@@ -390,6 +396,61 @@ class ClaudeAdvisorAdapter:
         raise ClaudeMissingApiKeyError(
             "no Claude API key available: pass api_key=... or set the "
             f"{CLAUDE_API_KEY_ENV_VAR} environment variable"
+        )
+
+    # -- connection probe (Test Connection) --------------------------------
+    def _test_connection(self) -> str:
+        """The smallest safe authenticated call that proves this configuration.
+
+        Deliberately **private**: the adapter's public surface stays exactly
+        ``advise`` plus its read-only identity, so probing is a composition
+        concern that happens to reuse this adapter's endpoint, auth and
+        transport. One attempt, no retry - a probe is a question, not a
+        delivery - and the answer is a single :class:`ConnectionStatus` value,
+        never a status code, a header, a body or the key.
+        """
+        try:
+            api_key = self._resolve_api_key()
+        except ClaudeAdvisorError:
+            return ConnectionStatus.AUTH_ERROR.value
+        try:
+            response = self._transport(self._probe_request(api_key))
+        except HttpTransportError:
+            return ConnectionStatus.NETWORK_ERROR.value
+        except Exception:  # noqa: BLE001 - a probe reports, it never raises
+            return ConnectionStatus.NETWORK_ERROR.value
+        return _classify_connection_status(response.status_code).value
+
+    def _probe_request(self, api_key: str) -> HttpRequest:
+        """The minimal Messages request: one token, the configured model, real auth.
+
+        Anthropic requires ``max_tokens`` and at least one message; the model is
+        the only input this well-formed probe can get wrong, which is what makes
+        a model 4xx meaningful.
+        """
+        body = json.dumps(
+            {
+                "model": self._model,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "ping"}],
+                "temperature": 0,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return HttpRequest(
+            url=self._url,
+            body=body,
+            headers={
+                # the only place the key ever appears
+                "x-api-key": api_key,
+                "anthropic-version": self._api_version,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+            timeout=self._timeout,
         )
 
     # -- request -----------------------------------------------------------

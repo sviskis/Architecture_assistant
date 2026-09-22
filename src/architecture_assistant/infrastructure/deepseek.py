@@ -1,49 +1,50 @@
-"""Grok advisor adapter - the "Challenger / Alternative Framing" of the port.
+"""DeepSeek advisor adapter - an added, independent AdvisorPort implementation.
 
-The assistant already has two consultative perspectives: the OpenAI adapter
-(Step 12) is the *Implementation Analyst* ("HOW to realize this?") and the Claude
-adapter (Step 13) is the *Critical Reviewer / Risk Analyst* ("WHAT can break,
-what is weak, what assumptions are risky?"). This adapter adds the third,
-deliberately different one - the **Challenger / Alternative Framing**:
+The assistant already has three consultative perspectives: the OpenAI adapter is
+the *Implementation Analyst*, the Claude adapter the *Critical Reviewer* and the
+Grok adapter the *Challenger*. This adapter adds a fourth, deliberately
+independent one - the **Independent Reviewer**, which answers the same review
+question from its own evidence without being wired into any other provider:
 
-    **"ARE we solving the right problem? What alternative approach exists?"**
+    **"What does the evidence actually support, on its own?"**
 
-All three are *consultative* and none of them can decide anything:
+Like every other advisor it is *consultative* and can decide nothing:
 
-* this adapter is **never** wired into ``decide_review``, the realization gate,
-  the orchestrator or the architecture validator, so a model answer can never
+* it is **never** wired into ``decide_review``, the realization gate, the
+  orchestrator or the architecture validator, so a model answer can never
   override a deterministic rule, a persisted baseline or a gate verdict;
 * it returns a :class:`Finding <architecture_assistant.domain.models.Finding>` -
   never a :class:`Decision <architecture_assistant.domain.models.Decision>`, a
   version, a rule change or an ADR. There is **no** evidence merger, **no** judge,
-  **no** majority vote and **no** decision engine here: the three advisors stay
-  fully independent, they never vote, and deterministic architecture rules
-  outrank every one of them;
+  **no** majority vote and **no** decision engine here: the advisors stay fully
+  independent, they never vote, and deterministic rules outrank every one of
+  them. DeepSeek is **not** authoritative - it is just another ``AdvisorPort``;
 * it must **fail closed**. A timeout, a broken HTTP status, a malformed model
-  answer or an explicit abstention raises a specific error - it never invents an
-  alternative to keep the loop moving.
+  answer or an explicit abstention raises a specific error - it never invents a
+  finding to keep the loop moving.
 
 The role is adapter metadata (the system-prompt persona), not a domain concept:
-the finding carries ``source="grok"`` and the domain model is unchanged.
+the finding carries ``source="deepseek"`` and the domain model is unchanged.
 
 Wire format
 -----------
-Provider-specific facts live here and nowhere else: the xAI chat-completions
-request/response shape (``messages`` in, ``choices[0].message.content`` and
-``usage.prompt_tokens``/``completion_tokens`` out), the ``Authorization: Bearer``
-header, the ``https://api.x.ai/v1/chat/completions`` endpoint and the
-``XAI_API_KEY`` environment variable. xAI is OpenAI-compatible, so the shape looks
-like the OpenAI adapter's - it is still this module's own code, never shared.
+Provider-specific facts live here and nowhere else: the DeepSeek
+chat-completions request/response shape (``messages`` in,
+``choices[0].message.content`` and ``usage.prompt_tokens``/``completion_tokens``
+out), the ``Authorization: Bearer`` header, the
+``https://api.deepseek.com/chat/completions`` endpoint and the
+``DEEPSEEK_API_KEY`` environment variable. DeepSeek is OpenAI-compatible, so the
+shape looks like the OpenAI and Grok adapters' - it is still this module's own
+code, never shared.
 
 Everything mechanical is shared with the other provider adapters through the
 private ``._http`` module (HTTP DTOs, ``urllib`` transport, transport error,
 retry classification, redaction, primitive validators, the deterministic
-finding-id helper and the price model). ``_http.py`` is deliberately NOT extended
-for this step. Retry, abstain, cost and evidence semantics are identical to the
-OpenAI and Claude adapters by design.
+finding-id helper and the price model). Retry, abstain, cost and evidence
+semantics are identical to the other adapters by design.
 
 Model selection is *configuration, never architecture truth*: see
-:func:`resolve_grok_model` for the documented resolution order.
+:func:`resolve_deepseek_model` for the documented resolution order.
 
 Security / secrets
 ------------------
@@ -102,48 +103,49 @@ from ._http import (
 )
 
 __all__ = [
-    "GROK_PROVIDER",
-    "DEFAULT_GROK_MODEL",
-    "GROK_MODEL_ENV_VAR",
-    "CHALLENGER_ROLE",
-    "GROK_CHAT_COMPLETIONS_URL",
-    "XAI_API_KEY_ENV_VAR",
-    "DEFAULT_GROK_MAX_OUTPUT_TOKENS",
-    "resolve_grok_model",
-    "GrokAdvisorError",
-    "GrokMissingApiKeyError",
-    "GrokAdvisorTransportError",
-    "GrokAdvisorTimeoutError",
-    "GrokAdvisorRateLimitError",
-    "GrokAdvisorHttpError",
-    "GrokAdvisorInvalidResponseError",
-    "GrokAdvisorAbstainError",
-    "GrokAdvisorAdapter",
+    "DEEPSEEK_PROVIDER",
+    "DEFAULT_DEEPSEEK_MODEL",
+    "DEEPSEEK_MODEL_ENV_VAR",
+    "INDEPENDENT_REVIEWER_ROLE",
+    "DEEPSEEK_CHAT_COMPLETIONS_URL",
+    "DEEPSEEK_API_KEY_ENV_VAR",
+    "DEFAULT_DEEPSEEK_MAX_OUTPUT_TOKENS",
+    "resolve_deepseek_model",
+    "DeepSeekAdvisorError",
+    "DeepSeekMissingApiKeyError",
+    "DeepSeekAdvisorTransportError",
+    "DeepSeekAdvisorTimeoutError",
+    "DeepSeekAdvisorRateLimitError",
+    "DeepSeekAdvisorHttpError",
+    "DeepSeekAdvisorInvalidResponseError",
+    "DeepSeekAdvisorAbstainError",
+    "DeepSeekAdvisorAdapter",
 ]
 
 #: The provider id stored in ``Finding.source`` and ``CostRecord.provider``.
-GROK_PROVIDER = "grok"
+DEEPSEEK_PROVIDER = "deepseek"
 
 #: The single documented adapter default - used only when neither the
 #: constructor nor the environment names a model. A model name is configuration,
 #: never a statement about price, availability or architecture.
-DEFAULT_GROK_MODEL = "grok-4.6"
+DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
 
 #: Optional environment variable naming the model (configuration, not a rule).
-GROK_MODEL_ENV_VAR = "GROK_MODEL"
+DEEPSEEK_MODEL_ENV_VAR = "DEEPSEEK_MODEL"
 
-#: The advisor persona: a challenger that reframes the problem - not an analyst
-#: and not a critic. Adapter metadata, not a domain concept.
-CHALLENGER_ROLE = "Challenger / Alternative Framing"
+#: The advisor persona: an independent reader of the same evidence - not the
+#: analyst, not the critic and not the challenger. Adapter metadata, not a domain
+#: concept.
+INDEPENDENT_REVIEWER_ROLE = "Independent Reviewer"
 
-#: xAI chat-completions endpoint - the only Grok URL this codebase knows.
-GROK_CHAT_COMPLETIONS_URL = "https://api.x.ai/v1/chat/completions"
+#: DeepSeek chat-completions endpoint - the only DeepSeek URL this codebase knows.
+DEEPSEEK_CHAT_COMPLETIONS_URL = "https://api.deepseek.com/chat/completions"
 
 #: The environment variable the key is read from when none is injected.
-XAI_API_KEY_ENV_VAR = "XAI_API_KEY"
+DEEPSEEK_API_KEY_ENV_VAR = "DEEPSEEK_API_KEY"
 
-#: Grok's own output budget for one challenge (request shaping, not shared).
-DEFAULT_GROK_MAX_OUTPUT_TOKENS = 1024
+#: DeepSeek's own output budget for one review (request shaping, not shared).
+DEFAULT_DEEPSEEK_MAX_OUTPUT_TOKENS = 1024
 
 #: Used when the model abstains without putting anything in ``reason``.
 _ABSTAIN_REASON_FALLBACK = "the model abstained without stating a reason"
@@ -152,17 +154,17 @@ _CONTRACT_STATUS_OK = "OK"
 _CONTRACT_STATUS_ABSTAIN = "ABSTAIN"
 
 
-def resolve_grok_model(model: Optional[str] = None) -> str:
-    """Resolve the Grok model through one documented order.
+def resolve_deepseek_model(model: Optional[str] = None) -> str:
+    """Resolve the DeepSeek model through one documented order.
 
     A provider model name is **configuration, never architecture truth**, so it
     is never hardcoded into a rule or a contract:
 
     1. the explicit ``model`` argument (constructor / composition config), when
        non-blank;
-    2. the optional :data:`GROK_MODEL_ENV_VAR` environment variable, when
+    2. the optional :data:`DEEPSEEK_MODEL_ENV_VAR` environment variable, when
        non-blank;
-    3. :data:`DEFAULT_GROK_MODEL` - the one documented adapter default.
+    3. :data:`DEFAULT_DEEPSEEK_MODEL` - the one documented adapter default.
 
     Nothing here checks that the model exists. The assistant must compose and run
     fully offline, so an unknown or retired model name is a provider-side failure
@@ -170,48 +172,45 @@ def resolve_grok_model(model: Optional[str] = None) -> str:
     """
     if model is not None and str(model).strip():
         return str(model).strip()
-    from_env = os.environ.get(GROK_MODEL_ENV_VAR, "")
+    from_env = os.environ.get(DEEPSEEK_MODEL_ENV_VAR, "")
     if from_env.strip():
         return from_env.strip()
-    return DEFAULT_GROK_MODEL
+    return DEFAULT_DEEPSEEK_MODEL
 
 
-class GrokAdvisorError(Exception):
-    """Base class for every Grok advisor failure."""
+class DeepSeekAdvisorError(Exception):
+    """Base class for every DeepSeek advisor failure."""
 
 
-class GrokMissingApiKeyError(GrokAdvisorError):
+class DeepSeekMissingApiKeyError(DeepSeekAdvisorError):
     """Raised when neither the argument nor the environment provides a key."""
 
 
-class GrokAdvisorTransportError(GrokAdvisorError):
+class DeepSeekAdvisorTransportError(DeepSeekAdvisorError):
     """The request could not be delivered (retries used up)."""
 
 
-class GrokAdvisorTimeoutError(GrokAdvisorTransportError):
+class DeepSeekAdvisorTimeoutError(DeepSeekAdvisorTransportError):
     """The request timed out (retries used up)."""
 
 
-class GrokAdvisorRateLimitError(GrokAdvisorError):
+class DeepSeekAdvisorRateLimitError(DeepSeekAdvisorError):
     """HTTP 429 (retries used up)."""
 
 
-class GrokAdvisorHttpError(GrokAdvisorError):
+class DeepSeekAdvisorHttpError(DeepSeekAdvisorError):
     """A non-retryable status - or a retryable one that never recovered."""
 
 
-class GrokAdvisorInvalidResponseError(GrokAdvisorError):
+class DeepSeekAdvisorInvalidResponseError(DeepSeekAdvisorError):
     """The answer violated the structured output contract.
 
-    This is the *defect* path: the model returned something that is not the
-    agreed json object, or an ``OK`` answer without the claim/evidence the
-    contract requires. It is deliberately distinct from
-    :class:`GrokAdvisorAbstainError` - a broken contract must never be reported
-    as a deliberate refusal.
+    This is **not** an abstention: an abstention is the model saying so. A broken
+    contract is a defect and must be told apart from a deliberate refusal.
     """
 
 
-class GrokAdvisorAbstainError(GrokAdvisorError):
+class DeepSeekAdvisorAbstainError(DeepSeekAdvisorError):
     """The model explicitly abstained or refused to answer.
 
     A legitimate outcome, not a defect: the surrounding system decides what an
@@ -225,30 +224,29 @@ class GrokAdvisorAbstainError(GrokAdvisorError):
             if isinstance(reason, str) and reason.strip()
             else _ABSTAIN_REASON_FALLBACK
         )
-        super().__init__(f"Grok advisor abstained: {text}")
+        super().__init__(f"DeepSeek advisor abstained: {text}")
         self.reason = text
 
 
-class GrokAdvisorAdapter:
-    """Grok implementation of the advisor port (Challenger / Alternative Framing).
+class DeepSeekAdvisorAdapter:
+    """DeepSeek implementation of the advisor port (Independent Reviewer).
 
     The adapter is *only* a capability: constructing it opens no connection, reads
     no key and changes no state, so the composition root may always build it and a
-    project without ``XAI_API_KEY`` simply never calls :meth:`advise`. The
-    deterministic gate is entirely unaffected either way.
+    project without ``DEEPSEEK_API_KEY`` simply never calls :meth:`advise`.
     """
 
     def __init__(
         self,
         api_key: Optional[str] = None,
         *,
-        url: str = GROK_CHAT_COMPLETIONS_URL,
+        url: str = DEEPSEEK_CHAT_COMPLETIONS_URL,
         model: Optional[str] = None,
-        role: str = CHALLENGER_ROLE,
+        role: str = INDEPENDENT_REVIEWER_ROLE,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         max_retries: int = DEFAULT_MAX_RETRIES,
         backoff_schedule: Sequence[float] = DEFAULT_BACKOFF_SCHEDULE,
-        max_output_tokens: int = DEFAULT_GROK_MAX_OUTPUT_TOKENS,
+        max_output_tokens: int = DEFAULT_DEEPSEEK_MAX_OUTPUT_TOKENS,
         transport: Optional[Callable[[HttpRequest], HttpResponse]] = None,
         cost_sink: Optional[CostPort] = None,
         pricing: Optional[Mapping[str, ModelPrice]] = None,
@@ -265,7 +263,7 @@ class GrokAdvisorAdapter:
         )
         self._url = _require_text(url, "url")
         # config -> environment -> documented default; never architecture truth
-        self._model = _require_text(resolve_grok_model(model), "model")
+        self._model = _require_text(resolve_deepseek_model(model), "model")
         self._role = _require_text(role, "role")
         self._timeout = _require_number(
             timeout_seconds, "timeout_seconds", minimum=1e-6
@@ -319,11 +317,11 @@ class GrokAdvisorAdapter:
     @property
     def provider(self) -> str:
         """The provider id this adapter reports as ``Finding.source``."""
-        return GROK_PROVIDER
+        return DEEPSEEK_PROVIDER
 
     @property
     def model(self) -> str:
-        """The resolved model asked for the challenge."""
+        """The resolved model asked for the review."""
         return self._model
 
     @property
@@ -340,7 +338,7 @@ class GrokAdvisorAdapter:
         The key itself is never stored beyond construction and never returned.
         """
         return bool(self._api_key) or bool(
-            os.environ.get(XAI_API_KEY_ENV_VAR, "").strip()
+            os.environ.get(DEEPSEEK_API_KEY_ENV_VAR, "").strip()
         )
 
     @property
@@ -356,14 +354,14 @@ class GrokAdvisorAdapter:
     def __repr__(self) -> str:
         """Deliberately key-free - the API key must never be rendered."""
         return (
-            f"{type(self).__name__}(provider={GROK_PROVIDER!r}, "
+            f"{type(self).__name__}(provider={DEEPSEEK_PROVIDER!r}, "
             f"model={self._model!r}, role={self._role!r}, "
             f"configured={self.is_configured})"
         )
 
     # -- AdvisorPort -------------------------------------------------------
     def advise(self, query: AdvisorQuery) -> Finding:
-        """Answer one reframing question with an evidence-based finding.
+        """Answer one review question with an evidence-based finding.
 
         Raises instead of guessing: a missing key, an unrecoverable transport or
         status failure, a broken output contract, or an explicit abstention each
@@ -389,12 +387,12 @@ class GrokAdvisorAdapter:
         """The key for this call: argument first, environment second."""
         if self._api_key:
             return self._api_key
-        from_env = os.environ.get(XAI_API_KEY_ENV_VAR, "")
+        from_env = os.environ.get(DEEPSEEK_API_KEY_ENV_VAR, "")
         if from_env.strip():
             return from_env
-        raise GrokMissingApiKeyError(
-            "no xAI API key available: pass api_key=... or set the "
-            f"{XAI_API_KEY_ENV_VAR} environment variable"
+        raise DeepSeekMissingApiKeyError(
+            "no DeepSeek API key available: pass api_key=... or set the "
+            f"{DEEPSEEK_API_KEY_ENV_VAR} environment variable"
         )
 
     # -- connection probe (Test Connection) --------------------------------
@@ -410,7 +408,7 @@ class GrokAdvisorAdapter:
         """
         try:
             api_key = self._resolve_api_key()
-        except GrokAdvisorError:
+        except DeepSeekAdvisorError:
             return ConnectionStatus.AUTH_ERROR.value
         try:
             response = self._transport(self._probe_request(api_key))
@@ -423,7 +421,7 @@ class GrokAdvisorAdapter:
     def _probe_request(self, api_key: str) -> HttpRequest:
         """The minimal chat-completions request: one token, the model, real auth.
 
-        xAI is OpenAI-compatible, so the probe is the same minimal call; the
+        DeepSeek is OpenAI-compatible, so the probe is the same minimal call; the
         configured model is the only input this well-formed request can get
         wrong, which is what makes a model 4xx meaningful.
         """
@@ -455,11 +453,11 @@ class GrokAdvisorAdapter:
     def _build_payload(self, query: AdvisorQuery) -> bytes:
         """The exact request body - serialized once, reused for every attempt.
 
-        The xAI chat-completions shape (OpenAI-compatible): a ``system`` message,
-        a ``user`` message and an explicit ``json_object`` response format, since
-        the structured contract is what the rest of the system consumes. Canonical
-        JSON (sorted keys, compact separators) keeps the bytes stable, which is
-        what makes an identical retry payload testable.
+        The DeepSeek chat-completions shape (OpenAI-compatible): a ``system``
+        message, a ``user`` message and an explicit ``json_object`` response
+        format, since the structured contract is what the rest of the system
+        consumes. Canonical JSON (sorted keys, compact separators) keeps the bytes
+        stable, which is what makes an identical retry payload testable.
         """
         body = {
             "model": self._model,
@@ -483,13 +481,13 @@ class GrokAdvisorAdapter:
             "and gates always outrank you: never suggest bypassing them, never "
             "claim authority over them and never state that a rule may be "
             "ignored.\n"
-            "Your perspective is deliberately different from an implementation "
-            "analyst and from a critic: challenge the framing. Ask ARE we solving "
-            "the right problem, and name what alternative approach exists.\n"
-            "Answer the reframing question with ONE json object (RFC 8259) and "
-            "nothing else, matching exactly:\n"
+            "You are one independent opinion among several. Do not assume, "
+            "reference or defer to any other advisor: answer from the evidence "
+            "you were given, and never declare a majority, a winner or a vote.\n"
+            "Answer the review question with ONE json object (RFC 8259) "
+            "and nothing else, matching exactly:\n"
             '{"status":"OK"|"ABSTAIN",'
-            '"claim":"<one alternative framing or a challenged assumption>",'
+            '"claim":"<one sentence>",'
             '"evidence":["<concrete, checkable locator>"],'
             '"confidence":<number 0.0-1.0>,'
             '"severity":"LOW"|"MEDIUM"|"HIGH"|"CRITICAL",'
@@ -497,12 +495,10 @@ class GrokAdvisorAdapter:
             "Rules:\n"
             '- "OK" requires a non-empty claim AND at least one evidence entry;\n'
             "- every evidence entry must be a concrete, checkable locator "
-            "(module:line, rule id, symbol, file path or document citation) - a "
-            "provocative idea without evidence is not a finding;\n"
-            "- propose ONE alternative or challenge, never a competing decision: "
-            "you cannot overrule a rule, a baseline or a gate verdict;\n"
-            '- use "ABSTAIN" when the given context is insufficient or you '
-            'refuse to answer, and explain it in "reason".'
+            "(module:line, rule id, symbol, file path or document citation) - an "
+            "unsupported opinion is not evidence;\n"
+            '- use "ABSTAIN" when the given context is insufficient or you refuse '
+            'to answer, and explain it in "reason".'
         )
 
     def _user_prompt(self, query: AdvisorQuery) -> str:
@@ -516,8 +512,8 @@ class GrokAdvisorAdapter:
         )
         step = "unknown" if query.step_no is None else str(query.step_no)
         return (
-            "Question (ARE we solving the right problem? What alternative "
-            "approach exists?):\n"
+            "Question (independent review - what does the evidence actually "
+            "support?):\n"
             f"{query.question}\n"
             f"Step: {step}\n"
             "Context (json):\n"
@@ -546,21 +542,21 @@ class GrokAdvisorAdapter:
             timeout=self._timeout,
         )
         attempts = self._max_retries + 1
-        failure: Optional[GrokAdvisorError] = None
+        failure: Optional[DeepSeekAdvisorError] = None
         for attempt in range(attempts):
             try:
                 response = self._transport(request)
             except HttpTransportError as error:
                 if not error.retryable:
-                    raise GrokAdvisorTransportError(
+                    raise DeepSeekAdvisorTransportError(
                         _redact(str(error), api_key)
                     ) from error
                 failure = (
-                    GrokAdvisorTimeoutError(
-                        f"Grok request timed out after {self._timeout}s"
+                    DeepSeekAdvisorTimeoutError(
+                        f"DeepSeek request timed out after {self._timeout}s"
                     )
                     if error.timed_out
-                    else GrokAdvisorTransportError(
+                    else DeepSeekAdvisorTransportError(
                         _redact(str(error), api_key)
                     )
                 )
@@ -570,21 +566,21 @@ class GrokAdvisorAdapter:
                     return response
                 if not is_retryable_status(status):
                     # permanent: a bad key, a bad request, a missing model, ...
-                    raise GrokAdvisorHttpError(
+                    raise DeepSeekAdvisorHttpError(
                         self._status_message(status, response, api_key)
                     )
                 if status == HTTP_TOO_MANY_REQUESTS:
-                    failure = GrokAdvisorRateLimitError(
+                    failure = DeepSeekAdvisorRateLimitError(
                         self._status_message(status, response, api_key)
                     )
                 else:
-                    failure = GrokAdvisorHttpError(
+                    failure = DeepSeekAdvisorHttpError(
                         self._status_message(status, response, api_key)
                     )
             if attempt + 1 < attempts:
                 self._sleep(self._delay_for(attempt))
         if failure is None:  # pragma: no cover - unreachable by construction
-            raise GrokAdvisorError("Grok request failed without a cause")
+            raise DeepSeekAdvisorError("DeepSeek request failed without a cause")
         raise failure
 
     def _delay_for(self, attempt: int) -> float:
@@ -598,7 +594,7 @@ class GrokAdvisorAdapter:
         """A short status message - the provider text is redacted first."""
         detail = _excerpt(_redact(response.text(), secret))
         suffix = f": {detail}" if detail else ""
-        return f"Grok request failed with HTTP {status}{suffix}"
+        return f"DeepSeek request failed with HTTP {status}{suffix}"
 
     # -- response parsing ---------------------------------------------------
     def _parse_envelope(
@@ -608,13 +604,13 @@ class GrokAdvisorAdapter:
         try:
             data = response.json()
         except ValueError as error:
-            raise GrokAdvisorInvalidResponseError(
-                "Grok returned a body that is not JSON: "
+            raise DeepSeekAdvisorInvalidResponseError(
+                "DeepSeek returned a body that is not JSON: "
                 + _excerpt(_redact(response.text(), secret))
             ) from error
         if not isinstance(data, dict):
-            raise GrokAdvisorInvalidResponseError(
-                "Grok response must be a JSON object; got "
+            raise DeepSeekAdvisorInvalidResponseError(
+                "DeepSeek response must be a JSON object; got "
                 f"{type(data).__name__}"
             )
         return data
@@ -625,23 +621,23 @@ class GrokAdvisorAdapter:
     ) -> str:
         """The assistant message text from ``choices[0]`` - never redacted.
 
-        This is deliberately provider-specific and NOT shared: the xAI
+        This is deliberately provider-specific and NOT shared: the DeepSeek
         chat-completions shape puts the answer at
         ``choices[0].message.content``, and no usable content there is a contract
         defect rather than a silently empty finding.
         """
         choices = envelope.get("choices")
         if not isinstance(choices, list) or not choices:
-            raise GrokAdvisorInvalidResponseError(
-                "Grok response carries no choices: "
+            raise DeepSeekAdvisorInvalidResponseError(
+                "DeepSeek response carries no choices: "
                 + _excerpt(_redact(json.dumps(envelope, default=str), secret))
             )
         first = choices[0]
         message = first.get("message") if isinstance(first, Mapping) else None
         content = message.get("content") if isinstance(message, Mapping) else None
         if not isinstance(content, str) or not content.strip():
-            raise GrokAdvisorInvalidResponseError(
-                "Grok response carries no assistant content"
+            raise DeepSeekAdvisorInvalidResponseError(
+                "DeepSeek response carries no assistant content"
             )
         return content
 
@@ -653,12 +649,12 @@ class GrokAdvisorAdapter:
         try:
             contract = json.loads(text)
         except ValueError as error:
-            raise GrokAdvisorInvalidResponseError(
+            raise DeepSeekAdvisorInvalidResponseError(
                 "advisor answer is not JSON: "
                 + _excerpt(_redact(text, secret))
             ) from error
         if not isinstance(contract, dict):
-            raise GrokAdvisorInvalidResponseError(
+            raise DeepSeekAdvisorInvalidResponseError(
                 "advisor answer must be a JSON object; got "
                 f"{type(contract).__name__}"
             )
@@ -672,28 +668,28 @@ class GrokAdvisorAdapter:
 
         The abstention check comes first on purpose: an ``ABSTAIN`` answer is a
         deliberate refusal and must be reported as
-        :class:`GrokAdvisorAbstainError`, never as a broken contract - even when
-        it carries no claim. A missing or unknown ``status``, by contrast, is a
-        contract violation, because nothing announced a refusal.
+        :class:`DeepSeekAdvisorAbstainError`, never as a broken contract - even
+        when it carries no claim. A missing or unknown ``status``, by contrast,
+        is a contract violation, because nothing announced a refusal.
 
         The finding stays provider-neutral: only ``source`` names the provider,
         while ``claim``/``evidence``/``confidence``/``severity`` are exactly the
-        domain fields every advisor fills. The Challenger persona changes the
-        *question* the model answers, never the shape of the answer - and the
-        finding is one independent opinion, never a vote.
+        domain fields every advisor fills. The Independent Reviewer persona
+        changes the *question* the model answers, never the shape of the answer -
+        and the finding is one independent opinion, never a vote.
         """
         status = self._status_of(contract)
         if status == _CONTRACT_STATUS_ABSTAIN:
-            raise GrokAdvisorAbstainError(self._abstain_reason(contract))
+            raise DeepSeekAdvisorAbstainError(self._abstain_reason(contract))
         claim = self._claim_of(contract)
         evidence = self._evidence_of(contract)
         confidence = self._confidence_of(contract)
         severity = self._severity_of(contract)
         return Finding(
             id=_finding_id(
-                GROK_PROVIDER, self._model, query.step_no, claim, evidence
+                DEEPSEEK_PROVIDER, self._model, query.step_no, claim, evidence
             ),
-            source=GROK_PROVIDER,
+            source=DEEPSEEK_PROVIDER,
             claim=claim,
             evidence=evidence,
             confidence=confidence,
@@ -709,7 +705,7 @@ class GrokAdvisorAdapter:
         token = raw.strip().upper() if isinstance(raw, str) else ""
         if token in (_CONTRACT_STATUS_OK, _CONTRACT_STATUS_ABSTAIN):
             return token
-        raise GrokAdvisorInvalidResponseError(
+        raise DeepSeekAdvisorInvalidResponseError(
             'advisor answer field "status" must be "OK" or "ABSTAIN"; got '
             f"{_excerpt(str(raw), 40)!r} - a missing or unknown status is a "
             "contract violation, not an abstention"
@@ -726,7 +722,7 @@ class GrokAdvisorAdapter:
     def _claim_of(contract: Mapping[str, Any]) -> str:
         claim = contract.get("claim")
         if not isinstance(claim, str) or not claim.strip():
-            raise GrokAdvisorInvalidResponseError(
+            raise DeepSeekAdvisorInvalidResponseError(
                 'advisor answer field "claim" must be a non-empty string on an '
                 '"OK" answer'
             )
@@ -739,21 +735,21 @@ class GrokAdvisorAdapter:
         if isinstance(evidence, (str, bytes)) or not isinstance(
             evidence, (list, tuple)
         ):
-            raise GrokAdvisorInvalidResponseError(
+            raise DeepSeekAdvisorInvalidResponseError(
                 'advisor answer field "evidence" must be a list of locators'
             )
         entries: list[str] = []
         for item in evidence:
             if not isinstance(item, str) or not item.strip():
-                raise GrokAdvisorInvalidResponseError(
+                raise DeepSeekAdvisorInvalidResponseError(
                     'every "evidence" entry must be a non-empty string'
                 )
             entries.append(item.strip())
         if not entries:
-            raise GrokAdvisorInvalidResponseError(
+            raise DeepSeekAdvisorInvalidResponseError(
                 'advisor answer field "evidence" must contain at least one '
-                'locator on an "OK" answer - a provocative idea without evidence '
-                "is not a finding"
+                'locator on an "OK" answer - an unsupported opinion is not a '
+                "finding"
             )
         return tuple(entries)
 
@@ -763,13 +759,13 @@ class GrokAdvisorAdapter:
         if isinstance(confidence, bool) or not isinstance(
             confidence, (int, float)
         ):
-            raise GrokAdvisorInvalidResponseError(
+            raise DeepSeekAdvisorInvalidResponseError(
                 'advisor answer field "confidence" must be a number between 0.0 '
                 "and 1.0"
             )
         value = float(confidence)
         if not 0.0 <= value <= 1.0:
-            raise GrokAdvisorInvalidResponseError(
+            raise DeepSeekAdvisorInvalidResponseError(
                 'advisor answer field "confidence" must be between 0.0 and 1.0; '
                 f"got {value!r}"
             )
@@ -783,7 +779,7 @@ class GrokAdvisorAdapter:
             return Severity(token)
         except ValueError as error:
             valid = ", ".join(member.value for member in Severity)
-            raise GrokAdvisorInvalidResponseError(
+            raise DeepSeekAdvisorInvalidResponseError(
                 f'advisor answer field "severity" must be one of ({valid}); got '
                 f"{_excerpt(str(raw), 40)!r}"
             ) from error
@@ -807,10 +803,10 @@ class GrokAdvisorAdapter:
         ``event_id`` is the provider-native response id, the stable identity of
         this one logical billable event: a redelivery or a repeated ``record()``
         of the same response is recognised instead of counted twice, while two
-        genuine calls stay two events. A 2xx that carries usage but no response
-        id records nothing - the adapter raises ``CostIdentityUnavailableError``
-        into its own telemetry path rather than inventing an identity from the
-        clock or the request body.
+        genuine calls stay two events. A 2xx that carries usage but no response id
+        records nothing - the adapter raises ``CostIdentityUnavailableError`` into
+        its own telemetry path rather than inventing an identity from the clock or
+        the request body.
         """
         usage = self._usage_of(envelope)
         if usage is None or self._cost_sink is None:
@@ -819,8 +815,8 @@ class GrokAdvisorAdapter:
         try:
             self._cost_sink.record(
                 CostRecord(
-                    provider=GROK_PROVIDER,
-                    event_id=_cost_event_id(GROK_PROVIDER, envelope),
+                    provider=DEEPSEEK_PROVIDER,
+                    event_id=_cost_event_id(DEEPSEEK_PROVIDER, envelope),
                     model=self._model,
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
@@ -848,9 +844,9 @@ class GrokAdvisorAdapter:
 
     @staticmethod
     def _usage_of(envelope: Mapping[str, Any]) -> Optional[tuple[int, int]]:
-        """The xAI token counts, or ``None`` when they are unusable.
+        """The DeepSeek token counts, or ``None`` when they are unusable.
 
-        Provider-specific and NOT shared through ``._http``: the xAI
+        Provider-specific and NOT shared through ``._http``: the DeepSeek
         chat-completions shape reports ``prompt_tokens``/``completion_tokens``,
         and the mapping to the neutral ``(input, output)`` tuple belongs to this
         adapter.

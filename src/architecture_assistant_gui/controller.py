@@ -35,10 +35,30 @@ from architecture_assistant.composition import (
 __all__ = [
     "ABORT_STATES",
     "APPROVAL_STATES",
+    "CLEAR_LOGS_INTENT",
+    "CONNECTION_INTENT_KEYS",
+    "CONNECTION_SLOT_BY_INTENT",
+    "DISPLAY_INTENTS",
     "INTENTS",
     "LOG_LIMIT",
     "MIN_PROVIDER_PANES",
+    "POPUP_ADVISOR_KEYS",
+    "POPUP_AUDIT",
+    "POPUP_CONFLICTS",
+    "POPUP_COST",
+    "POPUP_INTENTS",
+    "POPUP_INTENT_GROUP",
+    "POPUP_LOGS",
+    "POPUP_PROJECT",
+    "POPUP_REPORTS",
+    "POPUP_RISKS",
+    "POPUP_ARCHITECTURE",
+    "POPUP_JUDGE",
+    "POPUP_SUPERVISOR",
+    "PROVIDER_INTENT_GROUP",
+    "PROVIDER_SETTINGS_INTENTS",
     "RESOLVE_STATES",
+    "SAVE_SETTINGS_INTENT",
     "SUPERVISION_DECIDABLE_STATUSES",
     "SUPERVISION_SEND_STATUSES",
     "SUPERVISOR_DECISION_INTENTS",
@@ -108,6 +128,157 @@ SUPERVISOR_INTENTS = (
     | SUPERVISOR_DECISION_INTENTS
 )
 
+#: One Test Connection action per advisor pane, in pane order. A pane is the only
+#: thing that knows *which* advisor slot it shows, so each pane gets its own key
+#: and its button submits exactly that key.
+CONNECTION_INTENT_KEYS: tuple[str, ...] = (
+    "test_connection_1",
+    "test_connection_2",
+    "test_connection_3",
+)
+
+#: Pane action -> the advisor slot that action configures, in the same order.
+CONNECTION_SLOT_BY_INTENT: dict[str, str] = {
+    "test_connection_1": "advisor_1",
+    "test_connection_2": "advisor_2",
+    "test_connection_3": "advisor_3",
+}
+
+#: The one action that persists the whole provider configuration.
+SAVE_SETTINGS_INTENT = "save_settings"
+
+#: Every action the provider-settings header offers.
+PROVIDER_SETTINGS_INTENTS: frozenset[str] = frozenset(
+    {SAVE_SETTINGS_INTENT, *CONNECTION_SLOT_BY_INTENT}
+)
+
+#: The group of the pane-level configuration buttons. Deliberately **not** one of
+#: the panel's ``GROUPS``: these two buttons live inside the advisor panes, so
+#: they must not also be duplicated into the generic Actions panel.
+PROVIDER_INTENT_GROUP = "Advisor pane"
+
+#: The popups that carry the secondary views: one window per thing the operator
+#: *consults* rather than works in. Each key is a display action - it queues no
+#: core work, reads only the last payload, and is addressed through the
+#: controller exactly like every other button, so no widget ever reaches the core.
+POPUP_COST = "cost_details"
+POPUP_LOGS = "open_logs"
+POPUP_AUDIT = "open_audit"
+POPUP_RISKS = "open_risks"
+POPUP_REPORTS = "open_reports"
+POPUP_PROJECT = "project_details"
+POPUP_ARCHITECTURE = "architecture_details"
+POPUP_SUPERVISOR = "supervisor_technical"
+POPUP_JUDGE = "review_judge_details"
+POPUP_CONFLICTS = "review_conflict_details"
+
+#: One advisor-detail popup per pane, in pane order: a pane is the only thing
+#: that knows which advisor slot it shows.
+POPUP_ADVISOR_KEYS: tuple[str, ...] = (
+    "advisor_details_1",
+    "advisor_details_2",
+    "advisor_details_3",
+)
+
+#: Every popup action the panel offers.
+POPUP_INTENTS: frozenset[str] = frozenset(
+    {
+        POPUP_COST,
+        POPUP_LOGS,
+        POPUP_AUDIT,
+        POPUP_RISKS,
+        POPUP_REPORTS,
+        POPUP_PROJECT,
+        POPUP_ARCHITECTURE,
+        POPUP_SUPERVISOR,
+        POPUP_JUDGE,
+        POPUP_CONFLICTS,
+        *POPUP_ADVISOR_KEYS,
+    }
+)
+
+#: The one action the logs area offers: it empties the *view* only.
+CLEAR_LOGS_INTENT = "clear_logs"
+
+#: The group of the popup windows' own buttons. Deliberately not one of the
+#: panel's ``GROUPS``: a popup button lives in the popup or in the compact
+#: utility bar, and is never duplicated into the generic Actions panel.
+POPUP_INTENT_GROUP = "Windows"
+
+#: Everything that only *displays* the last payload. These queue no core work, so
+#: they stay available while an action runs and after a CRITICAL failure: an
+#: operator must always be able to read the log, the audit trail or a detail view.
+DISPLAY_INTENTS: frozenset[str] = frozenset(
+    {"view_snapshot", CLEAR_LOGS_INTENT, *POPUP_INTENTS}
+)
+
+#: Popup table columns, in the same ``(key, heading, width)`` shape the main
+#: window uses, so one renderer draws both and the payload stays plain data.
+POPUP_FACT_COLUMNS: tuple[tuple[str, str, int], ...] = (
+    ("field", "Field", 220),
+    ("value", "Value", 640),
+)
+POPUP_COST_COLUMNS: tuple[tuple[str, str, int], ...] = (
+    ("item", "Item", 150),
+    ("cost", "Cost", 300),
+    ("tokens", "Tokens", 160),
+)
+POPUP_AUDIT_COLUMNS: tuple[tuple[str, str, int], ...] = (
+    ("created_at", "When", 150),
+    ("entity", "Entity", 150),
+    ("action", "Action", 100),
+    ("event", "Event", 150),
+    ("actor", "Actor", 110),
+    ("step", "Step", 60),
+    ("reason", "Reason", 320),
+    ("detail", "Detail payload", 520),
+)
+POPUP_LOG_COLUMNS: tuple[tuple[str, str, int], ...] = (
+    ("seq", "#", 50),
+    ("time", "Time", 150),
+    ("level", "Level", 60),
+    ("component", "Component", 110),
+    ("action", "Action", 140),
+    ("message", "Message", 560),
+    ("step", "Step", 50),
+    ("review", "Review id", 240),
+)
+POPUP_RISK_COLUMNS: tuple[tuple[str, str, int], ...] = (
+    ("id", "Risk id", 120),
+    ("severity", "Severity", 90),
+    ("probability", "Probability", 90),
+    ("impact", "Impact", 90),
+    ("owner", "Owner", 130),
+    ("status", "Status", 90),
+    ("description", "Description", 420),
+    ("mitigation", "Mitigation", 420),
+)
+POPUP_CONFLICT_COLUMNS: tuple[tuple[str, str, int], ...] = (
+    ("target", "Anchor", 160),
+    ("supporting", "Supporting findings", 380),
+    ("contradicting", "Contradicting findings", 380),
+    ("judge", "Judge", 180),
+)
+POPUP_HISTORY_COLUMNS: tuple[tuple[str, str, int], ...] = (
+    ("supervision", "Supervision", 160),
+    ("status", "Status", 130),
+    ("action", "Action", 100),
+    ("risk", "Risk", 80),
+    ("report", "Report hash", 160),
+    ("updated", "Updated", 170),
+)
+POPUP_REPORT_COLUMNS: tuple[tuple[str, str, int], ...] = (
+    ("kind", "Artifact", 140),
+    ("path", "Path", 700),
+)
+POPUP_PROVIDER_COLUMNS: tuple[tuple[str, str, int], ...] = (
+    ("source", "Advisor", 120),
+    ("status", "Status", 130),
+    ("relation", "Relation", 140),
+    ("anchor", "Anchor", 180),
+    ("cost", "Cost", 340),
+)
+
 
 @dataclass(frozen=True)
 class Intent:
@@ -154,6 +325,103 @@ INTENTS: tuple[Intent, ...] = (
             "incur provider cost. It changes no workflow state and writes "
             "nothing. Continue?"
         ),
+    ),
+    # The provider-settings header lives *inside* each advisor pane, so these
+    # actions are grouped under a name the Actions panel does not render: the
+    # button belongs next to the fields it saves, not in a generic list.
+    Intent(
+        key=SAVE_SETTINGS_INTENT,
+        label="Save Settings",
+        group=PROVIDER_INTENT_GROUP,
+        mutating=False,
+    ),
+    Intent(
+        key=CONNECTION_INTENT_KEYS[0],
+        label="Test Connection",
+        group=PROVIDER_INTENT_GROUP,
+        mutating=False,
+    ),
+    Intent(
+        key=CONNECTION_INTENT_KEYS[1],
+        label="Test Connection",
+        group=PROVIDER_INTENT_GROUP,
+        mutating=False,
+    ),
+    Intent(
+        key=CONNECTION_INTENT_KEYS[2],
+        label="Test Connection",
+        group=PROVIDER_INTENT_GROUP,
+        mutating=False,
+    ),
+    # The popup windows. Each one displays the last payload in its own resizable
+    # window, so the main tabs keep the workflow they exist for. They are grouped
+    # under a name the Actions panel does not render: the button belongs where it
+    # is used - in the utility bar, in the section it details, or in the pane.
+    Intent(
+        key=POPUP_COST,
+        label="Cost Details",
+        group=POPUP_INTENT_GROUP,
+        mutating=False,
+    ),
+    Intent(key=POPUP_LOGS, label="Logs", group=POPUP_INTENT_GROUP, mutating=False),
+    Intent(
+        key=CLEAR_LOGS_INTENT,
+        label="Clear Logs",
+        group=POPUP_INTENT_GROUP,
+        mutating=False,
+    ),
+    Intent(key=POPUP_AUDIT, label="Audit", group=POPUP_INTENT_GROUP, mutating=False),
+    Intent(key=POPUP_RISKS, label="Risks", group=POPUP_INTENT_GROUP, mutating=False),
+    Intent(
+        key=POPUP_REPORTS, label="Reports", group=POPUP_INTENT_GROUP, mutating=False
+    ),
+    Intent(
+        key=POPUP_PROJECT,
+        label="Project Details",
+        group=POPUP_INTENT_GROUP,
+        mutating=False,
+    ),
+    Intent(
+        key=POPUP_ARCHITECTURE,
+        label="Architecture Details",
+        group=POPUP_INTENT_GROUP,
+        mutating=False,
+    ),
+    Intent(
+        key=POPUP_SUPERVISOR,
+        label="Technical Details",
+        group=POPUP_INTENT_GROUP,
+        mutating=False,
+    ),
+    Intent(
+        key=POPUP_JUDGE,
+        label="View Judge Details",
+        group=POPUP_INTENT_GROUP,
+        mutating=False,
+    ),
+    Intent(
+        key=POPUP_CONFLICTS,
+        label="View Conflicts",
+        group=POPUP_INTENT_GROUP,
+        mutating=False,
+    ),
+    Intent(
+        key=POPUP_ADVISOR_KEYS[0],
+        label="Details...",
+        group=POPUP_INTENT_GROUP,
+        mutating=False,
+    ),
+    Intent(
+        key=POPUP_ADVISOR_KEYS[1],
+        label="Details...",
+        group=POPUP_INTENT_GROUP,
+        mutating=False,
+    ),
+    Intent(
+        key=POPUP_ADVISOR_KEYS[2],
+        label="Details...",
+        group=POPUP_INTENT_GROUP,
+        mutating=False,
     ),
     Intent(
         key="synthesize_proposal",
@@ -388,6 +656,20 @@ class GuiController:
         self._review_question = review_question
         self._review: Optional[dict[str, Any]] = None
         self._review_progress = ""
+        #: What the operator has typed into the advisor panes' configuration
+        #: header, per advisor slot. Plain data only, and the API key is only ever
+        #: the *typed* value: ``None`` means "keep whatever is stored", so a saved
+        #: secret never has to travel back into a widget.
+        self._provider_fields: dict[str, dict[str, Any]] = {}
+        #: The last Test Connection verdict per pane action key, exactly as the
+        #: core reported it (one of the documented statuses).
+        self._connection_results: dict[str, str] = {}
+        #: One line about the last provider-settings save, shown with the fields.
+        self._provider_note = ""
+        #: The export artifacts produced in this session, newest first - plain
+        #: data for the Reports popup. Only the path the core already reported is
+        #: kept: nothing here is read from a repository and none of it is state.
+        self._exports: list[dict[str, Any]] = []
         #: The managed-project proposal board (plain data from the core) plus the
         #: two operator inputs the tab collects: an optional requirement addendum
         #: and the revision feedback. Never a core object.
@@ -492,8 +774,10 @@ class GuiController:
 
     def enabled(self, intent: Intent) -> bool:
         """Whether the button for ``intent`` may be pressed right now."""
-        if intent.key == "view_snapshot":
-            return True  # pure display of the last payload
+        if intent.key in DISPLAY_INTENTS:
+            # pure display of the last payload: no core work, no mutation, so it
+            # stays available while an action runs and even under CRITICAL
+            return True
         if self.is_busy:
             return False
         if intent.key in (
@@ -501,6 +785,10 @@ class GuiController:
             "reconnect",
             "open_reports_folder",
             "run_review",
+            # The provider-settings header: testing and saving a local
+            # configuration is a diagnostic, never a mutation of workflow state,
+            # so it stays available next to the review it configures.
+            *PROVIDER_SETTINGS_INTENTS,
         ):
             return True
         if self._critical:
@@ -621,6 +909,11 @@ class GuiController:
         self, intent: Intent, reason: str
     ) -> Callable[[Any], dict[str, Any]]:
         """Build the callable the core thread will run for this intent."""
+        if intent.key in POPUP_INTENTS:
+            raise ValueError(
+                f"{intent.key} opens a popup from the last payload; it queues no "
+                "core work"
+            )
         if intent.key == "refresh":
             return self._read_action()
         if intent.key == "reconnect":
@@ -633,6 +926,12 @@ class GuiController:
             return self._import_action(reason)
         if intent.key == "run_review":
             return self._review_action()
+        if intent.key == SAVE_SETTINGS_INTENT:
+            return self._save_settings_action()
+        if intent.key in CONNECTION_SLOT_BY_INTENT:
+            return self._test_connection_action(
+                CONNECTION_SLOT_BY_INTENT[intent.key]
+            )
         if intent.key in PROPOSAL_INTENTS:
             return self._proposal_action(intent.key, reason)
         if intent.key in SUPERVISOR_INTENTS:
@@ -759,6 +1058,133 @@ class GuiController:
             }
 
         return action
+
+    # -- the per-advisor provider configuration ----------------------------
+
+    def set_provider_selection(self, selection: Mapping[str, Any]) -> None:
+        """Remember what the panes' configuration header currently shows.
+
+        Plain data per advisor slot: ``provider``, ``model`` and ``api_key``. The
+        key is the **typed** value or ``None`` for "keep the stored one" - a
+        stored key is never handed back here, so nothing downstream of a widget
+        can hold a saved secret.
+        """
+        if not isinstance(selection, Mapping):
+            raise ValueError("provider selection must be a mapping")
+        fields: dict[str, dict[str, Any]] = {}
+        for slot in CONNECTION_SLOT_BY_INTENT.values():
+            entry = selection.get(slot)
+            entry = entry if isinstance(entry, Mapping) else {}
+            typed_key = entry.get("api_key", None)
+            if typed_key is not None and not isinstance(typed_key, str):
+                typed_key = str(typed_key)
+            fields[slot] = {
+                "provider": entry.get("provider"),
+                "model": entry.get("model"),
+                "api_key": typed_key,
+            }
+        self._provider_fields = fields
+
+    def _stored_selection(self, slot: str) -> dict[str, Any]:
+        """The configured selection of one slot, as the core last reported it."""
+        settings = _mapping(self._payload.get("provider_settings"))
+        advisors = _mapping(settings.get("advisors"))
+        return dict(_mapping(advisors.get(slot)))
+
+    def _provider_entry(self, slot: str) -> dict[str, Any]:
+        """One slot's configuration: what was typed, else what is stored."""
+        stored = self._stored_selection(slot)
+        typed = self._provider_fields.get(slot) or {}
+        provider = typed.get("provider") or stored.get("provider") or "disabled"
+        model = typed.get("model")
+        if model is None:
+            model = stored.get("model", "")
+        return {
+            "provider": str(provider),
+            "model": "" if model is None else str(model),
+            "api_key": typed.get("api_key", None),
+        }
+
+    def provider_payload(self) -> dict[str, dict[str, Any]]:
+        """The three slots exactly as the save action will send them."""
+        return {
+            slot: self._provider_entry(slot)
+            for slot in CONNECTION_SLOT_BY_INTENT.values()
+        }
+
+    def _save_settings_action(self) -> Callable[[Any], dict[str, Any]]:
+        """Persist the whole provider configuration, then read everything back."""
+
+        payload = self.provider_payload()
+
+        def action(worker: Any) -> dict[str, Any]:
+            return {
+                "settings": worker.save_provider_settings(payload),
+                "payload": worker.payload(),
+            }
+
+        return action
+
+    def _test_connection_action(
+        self, slot: str
+    ) -> Callable[[Any], dict[str, Any]]:
+        """Probe one advisor's configuration - the smallest safe provider call."""
+
+        entry = self._provider_entry(slot)
+
+        def action(worker: Any) -> dict[str, Any]:
+            return {
+                "connection": worker.test_connection(
+                    slot,
+                    entry["provider"],
+                    entry["model"],
+                    entry.get("api_key"),
+                )
+            }
+
+        return action
+
+    def provider_settings_view(self) -> dict[str, Any]:
+        """The provider-settings header as plain, key-free data.
+
+        One row per advisor pane with the configured provider, the model, whether
+        a key is stored (never the key) and the last Test Connection verdict,
+        plus the catalog of choices and the load status - including the explicit
+        "provider settings invalid" wording when the file was damaged.
+        """
+        settings = _mapping(self._payload.get("provider_settings"))
+        advisors = _mapping(settings.get("advisors"))
+        rows: list[dict[str, Any]] = []
+        for index, intent_key in enumerate(CONNECTION_INTENT_KEYS):
+            slot = CONNECTION_SLOT_BY_INTENT[intent_key]
+            view = _mapping(advisors.get(slot))
+            rows.append(
+                {
+                    "slot": slot,
+                    "pane": index,
+                    "action": intent_key,
+                    "provider": str(view.get("provider") or ""),
+                    "provider_label": str(view.get("provider_label") or ""),
+                    "model": str(view.get("model") or ""),
+                    "key_set": bool(view.get("key_set")),
+                    "key_masked": str(view.get("key_masked") or ""),
+                    "connection": str(self._connection_results.get(intent_key, "")),
+                }
+            )
+        catalog = [
+            dict(option)
+            for option in (settings.get("catalog") or ())
+            if isinstance(option, Mapping)
+        ]
+        return {
+            "rows": rows,
+            "catalog": catalog,
+            "status": str(settings.get("status") or ""),
+            "status_text": str(settings.get("status_text") or ""),
+            "valid": bool(settings.get("valid", True)),
+            "path": str(settings.get("path") or ""),
+            "note": self._provider_note,
+        }
 
     # -- advisory supervision ----------------------------------------------
 
@@ -910,19 +1336,16 @@ class GuiController:
         record = dict(raw_record) if isinstance(raw_record, Mapping) else None
         raw_context = payload.get("context")
         context = dict(raw_context) if isinstance(raw_context, Mapping) else None
-        verdict = _mapping(payload.get("verdict"))
         return {
             "enabled": self.supervision_enabled(),
             "available": bool(payload),
             "status": self._supervisor_summary(payload, record),
             "waiting_for": self.supervision_waiting_for(),
             "instruction": self._instruction,
-            "header": self._supervisor_header(payload, record, runtime),
-            "assistant_pane": self._supervisor_assistant_pane(payload, context),
-            "cline_pane": self._supervisor_cline_pane(payload, context, record),
-            "supervisor_pane": self._supervisor_supervisor_pane(
-                payload, record, verdict
-            ),
+            "header": self._supervisor_header(payload, record),
+            "assistant_pane": self._supervisor_assistant_pane(payload),
+            "cline_pane": self._supervisor_cline_pane(payload, context),
+            "supervisor_pane": self._supervisor_supervisor_pane(record),
             "history_rows": self._supervision_history_rows(payload),
         }
 
@@ -959,14 +1382,8 @@ class GuiController:
         self,
         payload: Mapping[str, Any],
         record: Optional[Mapping[str, Any]],
-        runtime: Mapping[str, Any],
     ) -> list[list[str]]:
-        """The header row of the tab, in the order the plan lists it."""
-        polling = (
-            "running"
-            if runtime.get("running")
-            else ("stopped" if runtime else "not reporting")
-        )
+        """The compact summary row of the tab - the identifiers live in the popup."""
         return [
             ["Project", str(payload.get("project") or self.project_name())],
             ["Step", str(payload.get("step_no", "-"))],
@@ -976,12 +1393,6 @@ class GuiController:
                 "Supervisor state",
                 str("" if record is None else record.get("status") or "-") or "-",
             ],
-            ["Current report hash", _short(payload.get("current_report_hash"))],
-            [
-                "Supervision id",
-                _short(None if record is None else record.get("supervision_id")),
-            ],
-            ["Polling status", polling],
             ["Waiting For", self.supervision_waiting_for()],
         ]
 
@@ -991,15 +1402,17 @@ class GuiController:
         return str(project.get("name", "-"))
 
     def _supervisor_assistant_pane(
-        self, payload: Mapping[str, Any], context: Optional[Mapping[str, Any]]
+        self, payload: Mapping[str, Any]
     ) -> dict[str, Any]:
-        """LEFT pane: what the Architecture Assistant owns."""
-        facts = context or {}
+        """LEFT pane: the compact Assistant summary.
+
+        The full fact sheet - task text, constraints, ADRs, risks, findings and
+        change requests - is one click away in **Technical Details**; the pane
+        itself keeps only what the operator needs while working.
+        """
         return _pane(
             "Architecture Assistant",
             [
-                ("Task goal", str(facts.get("task_title") or "-")),
-                ("Task", str(facts.get("task_description") or "-")),
                 (
                     "Step state",
                     f"{payload.get('step_state') or '-'} | attempt "
@@ -1016,25 +1429,6 @@ class GuiController:
                     "Architecture baseline",
                     str(payload.get("architecture_version") or "-"),
                 ),
-                ("Constraints", _lines(facts.get("operator_constraints"))),
-                (
-                    "Accepted ADRs",
-                    _records(facts.get("accepted_adrs"), "id", "title"),
-                ),
-                (
-                    "Open risks",
-                    _records(facts.get("open_risks"), "id", "description"),
-                ),
-                (
-                    "Deterministic findings",
-                    _records(facts.get("deterministic_findings"), "id", "claim"),
-                ),
-                (
-                    "Open change requests",
-                    _records(
-                        facts.get("open_change_requests"), "request_id", "title"
-                    ),
-                ),
             ],
         )
 
@@ -1042,84 +1436,37 @@ class GuiController:
         self,
         payload: Mapping[str, Any],
         context: Optional[Mapping[str, Any]],
-        record: Optional[Mapping[str, Any]],
     ) -> dict[str, Any]:
-        """CENTER pane: the worker and the exact report it submitted."""
+        """CENTER pane: the compact worker and report summary."""
         facts = context or {}
         return _pane(
             "Cline",
             [
-                (
-                    "Task identity",
-                    f"{payload.get('project') or '-'} | step "
-                    f"{payload.get('step_no', '-')} attempt "
-                    f"{payload.get('attempt', '-')}",
-                ),
                 ("Worker state", str(payload.get("step_state") or "-")),
                 ("Report status", str(facts.get("report_status") or "-")),
                 ("Report summary", str(facts.get("report_summary") or "-")),
-                ("Files created", _lines(facts.get("report_files_created"))),
-                ("Files changed", _lines(facts.get("report_files_changed"))),
-                ("Files deleted", _lines(facts.get("report_files_deleted"))),
-                ("Tests", _mapping_text(facts.get("report_tests"))),
-                ("Issues", _lines(facts.get("worker_issues"))),
-                (
-                    "Architecture questions",
-                    _lines(facts.get("worker_architecture_questions")),
-                ),
-                (
-                    "Dependencies added",
-                    _lines(facts.get("worker_dependencies_added")),
-                ),
-                (
-                    "Report first seen",
-                    str(
-                        "" if record is None else record.get("first_seen_at") or "-"
-                    )
-                    or "-",
-                ),
-                ("Report hash", str(payload.get("current_report_hash") or "-")),
             ],
         )
 
     def _supervisor_supervisor_pane(
         self,
-        payload: Mapping[str, Any],
         record: Optional[Mapping[str, Any]],
-        verdict: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """RIGHT pane: the advisory analysis and the gate verdict."""
+        """RIGHT pane: the compact advisory analysis summary."""
         current = record or {}
         return _pane(
             "Supervisor",
             [
-                ("Provider", str(payload.get("provider") or "-")),
                 (
                     "Analysis status",
                     str(current.get("status") or self.supervision_waiting_for()),
                 ),
                 ("Action", str(current.get("action") or "-")),
                 ("Risk", str(current.get("risk") or "-")),
-                ("Reason", str(current.get("reason") or "-")),
-                ("Evidence", _lines(current.get("evidence"))),
-                (
-                    "Proposed instruction",
-                    str(current.get("instruction_for_cline") or "-"),
-                ),
                 ("Requires human", _yes(current.get("requires_human"))),
-                ("Decided by", str(current.get("decided_by") or "-")),
-                ("Decision reason", str(current.get("decision_reason") or "-")),
                 (
-                    "Gate",
-                    f"{'ALLOW' if verdict.get('allowed') else 'BLOCK'} | "
-                    f"{verdict.get('reason') or '-'}",
-                ),
-                (
-                    "Malformed deadlines",
-                    "stability "
-                    f"{payload.get('malformed_stability_seconds', '-')}s | "
-                    "absolute "
-                    f"{payload.get('malformed_timeout_seconds', '-')}s",
+                    "Instruction (short)",
+                    _brief(current.get("instruction_for_cline"), 60) or "-",
                 ),
             ],
         )
@@ -1664,6 +2011,39 @@ class GuiController:
 
     # -- the review tab ----------------------------------------------------
 
+    def review_highlights(self) -> dict[str, Any]:
+        """The compact factlets the review tab shows instead of the detail.
+
+        Cost, evidence conflicts and the judge are *summaries* here and full
+        windows in their popups, so the main tab never reserves space for data it
+        does not have: an unused judge and an empty conflict list cost one line
+        each, and the cost area is a single line plus one button.
+        """
+        review = self._review or {}
+        conflicts = [
+            conflict
+            for conflict in (review.get("conflicts") or ())
+            if isinstance(conflict, Mapping)
+        ]
+        judge = _mapping(review.get("judge"))
+        used = bool(judge.get("consulted"))
+        total = _mapping(_mapping(review.get("cost")).get("total"))
+        return {
+            "cost_summary": self.total_cost_text(),
+            "cost_available": bool(total.get("available")),
+            "cost_unavailable": bool(total) and not total.get("available"),
+            "conflicts_count": len(conflicts),
+            "conflicts_available": bool(conflicts),
+            "conflicts_summary": f"Conflicts: {len(conflicts)}",
+            "judge_used": used,
+            "judge_status": str(judge.get("status") or "-"),
+            "judge_summary": (
+                f"Judge used: {judge.get('status') or '-'}"
+                if used
+                else "Judge not used"
+            ),
+        }
+
     def review_view(self) -> dict[str, Any]:
         """The Architecture Review tab, as plain data.
 
@@ -1680,6 +2060,8 @@ class GuiController:
                 "available": False,
                 "question": self._review_question,
                 "progress": self._review_progress,
+                "provider_settings": self.provider_settings_view(),
+                **self.review_highlights(),
                 "status": "No architecture review has been run in this session.",
                 "header": [],
                 "provider_panels": self.provider_panels(),
@@ -1694,6 +2076,8 @@ class GuiController:
             "available": True,
             "question": self._review_question,
             "progress": self._review_progress,
+            "provider_settings": self.provider_settings_view(),
+            **self.review_highlights(),
             "status": self._review_summary(),
             "header": self.review_header(),
             "provider_panels": self.provider_panels(),
@@ -1994,6 +2378,11 @@ class GuiController:
             if bool(getattr(error, "critical", False)):
                 self._critical = True
             error_name = str(getattr(error, "error_name", "Error"))
+            if label == SAVE_SETTINGS_INTENT:
+                # A refused save changes nothing at all - say so next to the fields.
+                self._provider_note = (
+                    f"provider settings rejected ({error_name})"
+                )
             # The log names the exception *type*; the banner carries the detail.
             self.log(
                 f"{label} failed: {error_name}",
@@ -2049,8 +2438,17 @@ class GuiController:
         proposal = payload.get("proposal")
         if isinstance(proposal, Mapping):
             self._proposal = dict(proposal)
+        settings = payload.get("settings")
+        if isinstance(settings, Mapping):
+            # A finished provider-settings save: the note and a log line only.
+            self._apply_settings_result(label, settings)
+        connection = payload.get("connection")
+        if isinstance(connection, Mapping):
+            # A finished Test Connection probe: the verdict word only.
+            self._apply_connection_result(label, connection)
         outcome = payload.get("result")
         if isinstance(outcome, Mapping):
+            self._remember_export(label, outcome)
             self._describe(label, outcome)
         elif label == "refresh":
             self._log_action(label, "Refreshed from the monitor projection.")
@@ -2059,6 +2457,50 @@ class GuiController:
         if label == "import_plan":
             # The plan is now the source of truth's plan: nothing is pending.
             self.clear_plan()
+
+    def _apply_settings_result(
+        self, label: str, outcome: Mapping[str, Any]
+    ) -> None:
+        """Record one finished provider-settings save - never a credential.
+
+        The outcome carries a boolean, a path and the key-free configuration view,
+        so this method cannot render a secret even by accident.
+        """
+        saved = bool(outcome.get("saved"))
+        path = str(outcome.get("path") or "the provider settings file")
+        self._provider_note = (
+            "provider settings saved" if saved else "provider settings not saved"
+        )
+        self._log_action(
+            label,
+            (
+                f"Provider settings saved to {path}."
+                if saved
+                else (
+                    f"Provider settings were NOT saved: {path} could not be "
+                    "written, so nothing was changed."
+                )
+            ),
+            level=EVENT_LEVEL_INFO if saved else EVENT_LEVEL_WARN,
+        )
+
+    def _apply_connection_result(
+        self, label: str, outcome: Mapping[str, Any]
+    ) -> None:
+        """Record one Test Connection verdict, keyed by the pane's action key.
+
+        Only the verdict word travels: the probe answers ``CONNECTED``,
+        ``AUTH ERROR``, ``PROVIDER ERROR``, ``NETWORK ERROR``, ``MODEL ERROR`` or
+        ``DISABLED``, and nothing else is read from the payload.
+        """
+        status = str(outcome.get("status") or "")
+        self._connection_results[label] = status
+        provider = str(outcome.get("provider") or "?")
+        self._log_action(
+            label,
+            f"Test Connection ({provider}): {status or 'no verdict'}.",
+            level=EVENT_LEVEL_INFO if status == "CONNECTED" else EVENT_LEVEL_WARN,
+        )
 
     def _plan_summary(self) -> str:
         """One status line for a finished preview."""
@@ -2073,6 +2515,21 @@ class GuiController:
             "Plan preview: cannot be imported - "
             f"{preview.get('blocked_reason') or 'invalid plan'}."
         )
+
+    def _remember_export(self, label: str, outcome: Mapping[str, Any]) -> None:
+        """Remember one export artifact for the Reports popup.
+
+        Only what the core already reported is kept - the artifact kind and the
+        path it wrote - so the popup never has to ask for anything itself.
+        """
+        if label not in ("export_markdown", "export_excel"):
+            return
+        path = str(outcome.get("path") or "").strip()
+        if not path:
+            return
+        entry = {"kind": label, "path": path}
+        if entry not in self._exports:
+            self._exports.insert(0, entry)
 
     def _describe(self, label: str, outcome: Mapping[str, Any]) -> None:
         """One human-readable status line for a finished action."""
@@ -2257,6 +2714,756 @@ class GuiController:
         if not isinstance(canonical, Mapping):
             return "{}"
         return json.dumps(dict(canonical), indent=2, sort_keys=True)
+
+    # -- the popup windows (display only) ----------------------------------
+    #
+    # Every secondary view the main window no longer hosts is one of these: a
+    # plain-data *spec* the host renders in a resizable, non-modal window. Nothing
+    # here reads a repository, a provider or the database, and nothing here
+    # decides anything - each builder only reshapes the payload the controller
+    # already holds, so a popup can never disagree with the main window.
+
+    def popup_view(self, key: str) -> dict[str, Any]:
+        """The spec for one popup window, or ``{}`` when there is no such window."""
+        if key in POPUP_ADVISOR_KEYS:
+            return self.advisor_popup(POPUP_ADVISOR_KEYS.index(key))
+        builders = {
+            POPUP_COST: self.cost_popup,
+            POPUP_LOGS: self.logs_popup,
+            POPUP_AUDIT: self.audit_popup,
+            POPUP_RISKS: self.risks_popup,
+            POPUP_REPORTS: self.reports_popup,
+            POPUP_PROJECT: self.project_popup,
+            POPUP_ARCHITECTURE: self.architecture_popup,
+            POPUP_SUPERVISOR: self.supervisor_popup,
+            POPUP_JUDGE: self.judge_popup,
+            POPUP_CONFLICTS: self.conflicts_popup,
+        }
+        builder = builders.get(str(key))
+        return {} if builder is None else builder()
+
+    def cost_popup(self) -> dict[str, Any]:
+        """The full cost picture: total, per provider, the judge and the records.
+
+        The unavailable state is stated in words and **no number is invented**:
+        when the core reports that no cost telemetry exists, the popup says so and
+        leaves the amount out rather than printing a zero-dollar cost.
+        """
+        review = self._review
+        cost = _mapping((review or {}).get("cost"))
+        total = _mapping(cost.get("total"))
+        if review is None:
+            note = (
+                "Cost unavailable: no architecture review has been run in this "
+                "session."
+            )
+        elif not total:
+            note = "Cost unavailable: this review carried no cost section."
+        elif not total.get("available"):
+            note = (
+                "Cost unavailable: "
+                f"{total.get('reason') or 'no reason was reported'}."
+            )
+        else:
+            note = (
+                "Total cost of this review: "
+                f"{_number(total.get('total_usd')):.4f} USD | "
+                f"{total.get('record_count', 0)} record(s) | "
+                f"{total.get('input_tokens', 0)} in / "
+                f"{total.get('output_tokens', 0)} out tokens"
+            )
+        return {
+            "title": "Cost Details",
+            "note": note,
+            "sections": [
+                _popup_table(
+                    "Total (this review)",
+                    POPUP_COST_COLUMNS[:2],
+                    self._cost_total_rows(),
+                    empty="No cost data for this review.",
+                ),
+                _popup_table(
+                    "Per advisor and judge",
+                    POPUP_COST_COLUMNS,
+                    self.cost_rows(),
+                    empty="No per-advisor cost records for this review.",
+                ),
+                _popup_table(
+                    "All recorded cost (project)",
+                    POPUP_COST_COLUMNS,
+                    self._project_cost_rows(),
+                    empty="No cost records have been recorded yet.",
+                ),
+            ],
+        }
+
+    def _cost_total_rows(self) -> list[list[str]]:
+        """The total row set - honest about availability, never a fake zero."""
+        total = _mapping(_mapping((self._review or {}).get("cost")).get("total"))
+        if not total:
+            return []
+        if not total.get("available"):
+            return [
+                [
+                    "Availability",
+                    f"unavailable ({total.get('reason') or 'no reason reported'})",
+                ]
+            ]
+        records = total.get("record_count", 0)
+        priced = total.get("priced_record_count", 0)
+        unpriced = total.get("unpriced_record_count", 0)
+        return [
+            ["Availability", "available"],
+            ["Total cost", f"{_number(total.get('total_usd')):.4f} USD"],
+            [
+                "Total tokens",
+                f"{total.get('input_tokens', 0)} in / "
+                f"{total.get('output_tokens', 0)} out",
+            ],
+            [
+                "Cost records",
+                f"{records} ({priced} priced, {unpriced} unpriced)",
+            ],
+        ]
+
+    def _project_cost_rows(self) -> list[list[str]]:
+        """The project-wide cost aggregate the projection already reports."""
+        cost = _mapping(self._payload.get("cost"))
+        if not cost:
+            return []
+        return [
+            ["All records", f"{_number(cost.get('total_usd')):.4f} USD"],
+            [
+                "All tokens",
+                f"{cost.get('input_tokens', 0)} in / "
+                f"{cost.get('output_tokens', 0)} out",
+            ],
+            [
+                "Records",
+                f"{cost.get('record_count', 0)} "
+                f"({cost.get('priced_record_count', 0)} priced, "
+                f"{cost.get('unpriced_record_count', 0)} unpriced)",
+            ],
+        ]
+
+    def logs_popup(self) -> dict[str, Any]:
+        """The structured runtime events, newest first - the existing log view."""
+        return {
+            "title": "Logs",
+            "note": (
+                f"Read-only: {self.log_count} of {self.log_limit} entries kept, "
+                "newest first. This is the runtime event view, not the audit "
+                "trail: clearing it deletes nothing that was recorded."
+            ),
+            "sections": [
+                _popup_table(
+                    "Runtime events",
+                    POPUP_LOG_COLUMNS,
+                    self.log_rows(),
+                    empty="No events",
+                )
+            ],
+        }
+
+    def audit_popup(self) -> dict[str, Any]:
+        """The append-only trail, newest first - read-only here as everywhere."""
+        rows = self.audit_detail_rows()
+        return {
+            "title": "Audit History",
+            "note": (
+                f"{len(rows)} audit entr{'y' if len(rows) == 1 else 'ies'} read "
+                "from the append-only trail (newest first). Read-only: this window "
+                "cannot change, retract or re-decide anything."
+            ),
+            "sections": [
+                _popup_table(
+                    "Audit entries",
+                    POPUP_AUDIT_COLUMNS,
+                    rows,
+                    empty="No audit entries",
+                )
+            ],
+        }
+
+    def audit_detail_rows(self) -> list[list[str]]:
+        """Audit rows with the recorded reason pulled out of the detail payload."""
+        rows: list[list[str]] = []
+        for entry in self._audit:
+            detail = str(entry.get("detail", ""))
+            step_no = entry.get("step_no")
+            rows.append(
+                [
+                    str(entry.get("created_at", "")).replace("T", " ")[:19],
+                    f"{entry.get('entity_type', '')} "
+                    f"{entry.get('entity_id', '')}".strip(),
+                    str(entry.get("action", "")),
+                    str(entry.get("event", "")),
+                    str(entry.get("actor", "")),
+                    "-" if step_no is None else str(step_no),
+                    _reason_of(detail),
+                    detail,
+                ]
+            )
+        return rows
+
+    def risks_popup(self) -> dict[str, Any]:
+        """The full risk register: owner, mitigation and impact included."""
+        rows = self.risk_detail_rows()
+        return {
+            "title": "Risk Register",
+            "note": (
+                (
+                    f"{len(rows)} open risk(s)."
+                    if rows
+                    else "No open risks."
+                )
+                + " Read-only: risks are raised, mitigated and closed by the "
+                "core and by audited human actions, never here."
+            ),
+            "sections": [
+                _popup_table(
+                    "Open risks",
+                    POPUP_RISK_COLUMNS,
+                    rows,
+                    empty="No open risks",
+                )
+            ],
+        }
+
+    def risk_detail_rows(self) -> list[list[str]]:
+        """Every risk field the register holds, as table rows."""
+        rows: list[list[str]] = []
+        for risk in self._payload.get("open_risks") or ():
+            if not isinstance(risk, Mapping):
+                continue
+            rows.append(
+                [
+                    str(risk.get("id", "")),
+                    str(risk.get("severity", "")),
+                    str(risk.get("probability", "")),
+                    str(risk.get("impact", "")),
+                    str(risk.get("owner") or "-"),
+                    str(risk.get("status", "")),
+                    str(risk.get("description", "")),
+                    str(risk.get("mitigation") or "-"),
+                ]
+            )
+        return rows
+
+    def reports_popup(self) -> dict[str, Any]:
+        """Report artifacts and where they live - this session's export history."""
+        return {
+            "title": "Reports",
+            "note": (
+                f"Report directory: {self.reports_dir} | "
+                f"{len(self._exports)} artifact(s) produced in this session. The "
+                "export actions here are the same core calls the Reports buttons "
+                "use; nothing in this window writes anything itself."
+            ),
+            "sections": [
+                _popup_table(
+                    "Artifacts produced in this session",
+                    POPUP_REPORT_COLUMNS,
+                    [
+                        [str(entry.get("kind", "")), str(entry.get("path", ""))]
+                        for entry in self._exports
+                    ],
+                    empty="No report has been exported in this session.",
+                ),
+                _popup_table(
+                    "Latest report",
+                    POPUP_FACT_COLUMNS,
+                    self._latest_report_rows(),
+                    empty="No report projection is available yet.",
+                ),
+            ],
+            "actions": [
+                {"label": "Export Markdown", "key": "export_markdown"},
+                {"label": "Export Excel", "key": "export_excel"},
+                {"label": "Open reports folder", "key": "open_reports_folder"},
+            ],
+        }
+
+    def _latest_report_rows(self) -> list[list[str]]:
+        """What the last projection says about itself - no invented values."""
+        canonical = _mapping(self._payload.get("canonical"))
+        if not canonical:
+            return []
+        health = _mapping(self._payload.get("health"))
+        return [
+            ["Report directory", self.reports_dir],
+            ["Schema version", str(canonical.get("schema_version") or "-")],
+            ["Generated at", _stamp(canonical.get("generated_at"))],
+            ["Project", str(_mapping(canonical.get("project")).get("name") or "-")],
+            ["Steps", str(health.get("step_count", 0))],
+            [
+                "Architecture version",
+                str(self._payload.get("architecture_version") or "-"),
+            ],
+        ]
+
+    def project_popup(self) -> dict[str, Any]:
+        """The project's own read-only facts, technical but never secret."""
+        return {
+            "title": "Project Details",
+            "note": (
+                "Read-only runtime configuration and state. No credential, no "
+                "environment value and no provider key is shown here."
+            ),
+            "sections": [
+                _popup_table(
+                    "Project",
+                    POPUP_FACT_COLUMNS,
+                    self._project_rows(),
+                    empty="No project has been read yet.",
+                ),
+                _popup_table(
+                    "Paths and runtime",
+                    POPUP_FACT_COLUMNS,
+                    self._runtime_rows(),
+                    empty="No runtime configuration has been read yet.",
+                ),
+            ],
+        }
+
+    def _project_rows(self) -> list[list[str]]:
+        project = _mapping(self._payload.get("project"))
+        if not project:
+            return []
+        current = self.current_step()
+        return [
+            ["Project", str(project.get("name", "-"))],
+            ["Plan version", str(project.get("plan_version") or "-")],
+            ["Plan hash", str(project.get("plan_hash") or "-")],
+            ["Mode", str(project.get("mode", "-"))],
+            ["Paused", _yes(project.get("paused"))],
+            ["Current step", _step_no(current)],
+            ["Current state", str(self.current_state() or "-")],
+            [
+                "Current step (snapshot field, non-authoritative)",
+                str(project.get("current_step_no_snapshot") or "-"),
+            ],
+            ["Created at", _stamp(project.get("created_at"))],
+            ["Updated at", _stamp(project.get("updated_at"))],
+        ]
+
+    def _runtime_rows(self) -> list[list[str]]:
+        paths = _mapping(self._payload.get("paths"))
+        if not paths and not self._payload:
+            return []
+        reviewers = self.configured_advisors()
+        return [
+            ["Database path", str(paths.get("database_path") or "-")],
+            ["Worker channel", str(paths.get("exchange_dir") or "-")],
+            ["Report directory", str(paths.get("report_dir") or self.reports_dir)],
+            ["Source root", str(paths.get("source_root") or "-")],
+            [
+                "Architecture baseline",
+                str(self._payload.get("architecture_version") or "-"),
+            ],
+            ["Advisors", ", ".join(reviewers) or "-"],
+            ["Steps", str(self.step_count())],
+        ]
+
+    def architecture_popup(self) -> dict[str, Any]:
+        """The deterministic side: baseline, rules, violations, gate and source root."""
+        gate = _mapping((self._review or {}).get("deterministic_gate"))
+        declared = _mapping(
+            _mapping(self._payload.get("canonical")).get("architecture")
+        )
+        return {
+            "title": "Architecture Details",
+            "note": (
+                "The deterministic view: the canonical baseline, the rules the "
+                "review applied, the violations it found and the gate verdict. The "
+                "gate remains the only verdict - an advisor can never override it."
+            ),
+            "sections": [
+                _popup_table(
+                    "Baseline",
+                    POPUP_FACT_COLUMNS,
+                    self._baseline_rows(declared),
+                    empty="No baseline has been read from the projection.",
+                ),
+                _popup_table(
+                    "Declared rules of the baseline",
+                    POPUP_FACT_COLUMNS,
+                    [
+                        [f"Rule {index + 1}", str(rule)]
+                        for index, rule in enumerate(declared.get("rules") or ())
+                    ],
+                    empty="No declared rule was read for this baseline.",
+                ),
+                _popup_table(
+                    "Deterministic gate",
+                    POPUP_FACT_COLUMNS,
+                    self._gate_rows(gate),
+                    empty="No deterministic gate check is available.",
+                ),
+                _popup_table(
+                    "Rules applied by this review",
+                    POPUP_FACT_COLUMNS,
+                    [
+                        [f"Rule {index + 1}", str(rule)]
+                        for index, rule in enumerate(gate.get("rules") or ())
+                    ],
+                    empty="No rule identifiers were reported for this review.",
+                ),
+                _popup_table(
+                    "Violations",
+                    POPUP_FACT_COLUMNS,
+                    [
+                        [f"Finding {index + 1}", str(item)]
+                        for index, item in enumerate(gate.get("finding_ids") or ())
+                    ],
+                    empty="No violating finding was reported.",
+                ),
+            ],
+        }
+
+    def _baseline_rows(self, declared: Mapping[str, Any]) -> list[list[str]]:
+        """The canonical baseline as rows - and nothing it does not report."""
+        version = str(self._payload.get("architecture_version") or "-")
+        if not declared:
+            return []
+        rows = [
+            ["Current baseline version", version],
+            ["Declared baseline", str(declared.get("version") or "-")],
+            ["Description", str(declared.get("baseline") or "-")],
+            ["Declared here", _stamp(declared.get("created_at"))],
+            ["Is current", _yes(declared.get("is_current"))],
+            ["Superseded by", str(declared.get("superseded_by") or "-")],
+            ["Declared rules", str(len(declared.get("rules") or ()))],
+            # The deterministic check reports rules and violations; it does not
+            # report how many modules it scanned, so the row says exactly that.
+            [
+                "Modules scanned",
+                "not reported for this review (the check reports rules and "
+                "violations)",
+            ],
+        ]
+        return rows
+
+    def _gate_rows(self, gate: Mapping[str, Any]) -> list[list[str]]:
+        """The gate verdict as rows - or why there is none."""
+        if not gate:
+            return []
+        rows = [
+            ["Available", _yes(gate.get("available"))],
+            ["Baseline version", str(gate.get("baseline_version") or "-")],
+            [
+                "Compliant",
+                _yes(gate.get("compliant")) if gate.get("available") else "-",
+            ],
+            ["Violations", str(gate.get("violation_count", 0))],
+            ["Decision id", str(gate.get("decision_id") or "-")],
+            ["Decision status", str(gate.get("decision_status") or "-")],
+            ["Source root", self._source_root_text()],
+        ]
+        if not gate.get("available"):
+            rows.append(["Reason", str(gate.get("reason") or "not reported")])
+        return rows
+
+    def _source_root_text(self) -> str:
+        """Which source tree the deterministic check actually inspected."""
+        review = self._review or {}
+        source_root = str(review.get("source_root") or "-")
+        if review.get("source_root_verified"):
+            return f"{source_root} (confirmed)"
+        return (
+            f"{source_root} [NOT confirmed; the check reports "
+            f"{review.get('check_source_root') or 'no root'}]"
+        )
+
+    def supervisor_popup(self) -> dict[str, Any]:
+        """Supervisor technical details - everything the compact pane leaves out."""
+        payload = self.supervision()
+        runtime = _mapping(self._supervisor.get("runtime"))
+        raw_record = payload.get("record")
+        record = dict(raw_record) if isinstance(raw_record, Mapping) else {}
+        raw_context = payload.get("context")
+        context = dict(raw_context) if isinstance(raw_context, Mapping) else {}
+        verdict = _mapping(payload.get("verdict"))
+        return {
+            "title": "Supervisor - technical details",
+            "note": (
+                "The bounded fact sheet, the supervision identity, the report "
+                "identity, the gate verdict, the persisted deadlines and the status "
+                "history. Advisory only: nothing here is authority, and no "
+                "credential or raw provider body is shown."
+            ),
+            "sections": [
+                _popup_table(
+                    "Supervision identity",
+                    POPUP_FACT_COLUMNS,
+                    self._supervision_identity_rows(payload, record),
+                    empty="No supervision record exists for this attempt.",
+                ),
+                _popup_table(
+                    "Report and attempt",
+                    POPUP_FACT_COLUMNS,
+                    self._supervision_report_rows(payload, context),
+                    empty="No worker report has been read for this attempt.",
+                ),
+                _popup_table(
+                    "Gate verdict and deadlines",
+                    POPUP_FACT_COLUMNS,
+                    self._supervision_gate_rows(payload, verdict),
+                    empty="No supervision gate verdict is available.",
+                ),
+                _popup_table(
+                    "Status history",
+                    POPUP_HISTORY_COLUMNS,
+                    self._supervision_history_rows(payload),
+                    empty="No supervision history for this attempt.",
+                ),
+                _popup_text(
+                    "Full evidence",
+                    _lines_of(record.get("evidence")),
+                    empty="No evidence was recorded with this supervision.",
+                ),
+                _popup_text(
+                    "Full instruction",
+                    [str(record.get("instruction_for_cline") or "")],
+                    empty="No instruction was recorded with this supervision.",
+                ),
+                _popup_table(
+                    "Runtime and polling",
+                    POPUP_FACT_COLUMNS,
+                    self._supervision_runtime_rows(payload, runtime),
+                    empty="The supervision runtime is not reporting.",
+                ),
+            ],
+        }
+
+    def _supervision_identity_rows(
+        self, payload: Mapping[str, Any], record: Mapping[str, Any]
+    ) -> list[list[str]]:
+        """The identity of one supervision: id, status, decision, timestamps."""
+        if not record:
+            return []
+        return [
+            ["Supervision id", str(record.get("supervision_id") or "-")],
+            ["Status", str(record.get("status") or "-")],
+            ["Action", str(record.get("action") or "-")],
+            ["Risk", str(record.get("risk") or "-")],
+            ["Requires human", _yes(record.get("requires_human"))],
+            ["Decided by", str(record.get("decided_by") or "-")],
+            ["Decision reason", str(record.get("decision_reason") or "-")],
+            ["Reason", str(record.get("reason") or "-")],
+            ["Created at", _stamp(record.get("created_at"))],
+            ["Updated at", _stamp(record.get("updated_at"))],
+            ["Waiting for", self.supervision_waiting_for()],
+        ]
+
+    def _supervision_report_rows(
+        self, payload: Mapping[str, Any], context: Mapping[str, Any]
+    ) -> list[list[str]]:
+        """The report identity and the attempt it belongs to."""
+        if not payload:
+            return []
+        return [
+            ["Project", str(payload.get("project") or self.project_name())],
+            ["Step", str(payload.get("step_no", "-"))],
+            ["Attempt", str(payload.get("attempt", "-"))],
+            [
+                "Attempts",
+                f"{payload.get('attempts_remaining', '-')} remaining of "
+                f"{payload.get('max_attempts', '-')}",
+            ],
+            ["Worker state", str(payload.get("step_state") or "-")],
+            ["Report hash (current)", str(payload.get("current_report_hash") or "-")],
+            ["Report status", str(context.get("report_status") or "-")],
+            ["Report summary", str(context.get("report_summary") or "-")],
+            ["Architecture version", str(payload.get("architecture_version") or "-")],
+            ["Provider", str(payload.get("provider") or "-")],
+        ]
+
+    def _supervision_gate_rows(
+        self, payload: Mapping[str, Any], verdict: Mapping[str, Any]
+    ) -> list[list[str]]:
+        """The fail-closed gate verdict and the persisted malformed deadlines."""
+        return [
+            [
+                "Gate",
+                f"{'ALLOW' if verdict.get('allowed') else 'BLOCK'} | "
+                f"{verdict.get('reason') or '-'}",
+            ],
+            [
+                "Malformed deadlines",
+                "stability "
+                f"{payload.get('malformed_stability_seconds', '-')}s | "
+                "absolute "
+                f"{payload.get('malformed_timeout_seconds', '-')}s",
+            ],
+        ]
+
+    def _supervision_runtime_rows(
+        self, payload: Mapping[str, Any], runtime: Mapping[str, Any]
+    ) -> list[list[str]]:
+        """Runtime/poll details - the host's schedule, reported by the core."""
+        polling = (
+            "running"
+            if runtime.get("running")
+            else ("stopped" if runtime else "not reporting")
+        )
+        return [
+            ["Supervision enabled", _yes(self.supervision_enabled())],
+            ["Polling status", polling],
+            ["Runtime state", str(runtime.get("state") or "-")],
+            ["Runtime running", _yes(runtime.get("running"))],
+            ["Recorded statuses", str(len(payload.get("history") or ()))],
+        ]
+
+    def judge_popup(self) -> dict[str, Any]:
+        """The judge's full sanitized output - a separate layer, advisory only."""
+        judge = _mapping((self._review or {}).get("judge"))
+        used = bool(judge.get("consulted"))
+        return {
+            "title": "Judge Details",
+            "note": (
+                "The judge was consulted for an explicitly declared evidence "
+                "conflict. Its decision explains that conflict and never replaces "
+                "the deterministic verdict."
+                if used
+                else "The judge was not consulted for this review: no structurally "
+                "valid evidence conflict was declared."
+            ),
+            "sections": [
+                _popup_table(
+                    "Judge",
+                    POPUP_FACT_COLUMNS,
+                    [
+                        ["Available", _yes(judge.get("available"))],
+                        ["Consulted", _yes(judge.get("consulted"))],
+                        ["Status", str(judge.get("status") or "-")],
+                        ["Conflicts answered", str(judge.get("count", 0))],
+                        ["Reason", str(judge.get("reason") or "-")],
+                    ],
+                    empty="No judge result has been produced.",
+                ),
+                _popup_text(
+                    "Full judge output",
+                    self.judge_lines(),
+                    empty="No judge output.",
+                ),
+            ],
+        }
+
+    def conflicts_popup(self) -> dict[str, Any]:
+        """Every validated evidence conflict, with the judge's answer if any."""
+        conflicts = [
+            conflict
+            for conflict in ((self._review or {}).get("conflicts") or ())
+            if isinstance(conflict, Mapping)
+        ]
+        resolved = self._judge_status_by_target()
+        rows = [
+            [
+                str(conflict.get("target", "")),
+                ", ".join(
+                    str(item) for item in (conflict.get("supporting_ids") or ())
+                )
+                or "-",
+                ", ".join(
+                    str(item) for item in (conflict.get("contradicting_ids") or ())
+                )
+                or "-",
+                resolved.get(str(conflict.get("target", "")), "not judged"),
+            ]
+            for conflict in conflicts
+        ]
+        return {
+            "title": "Evidence Conflicts",
+            "note": (
+                f"{len(rows)} validated conflict(s). A conflict is explicit "
+                "metadata, never inferred from text, severity or overlap; the judge "
+                "explains it and never decides."
+            ),
+            "sections": [
+                _popup_table(
+                    "Conflicts",
+                    POPUP_CONFLICT_COLUMNS,
+                    rows,
+                    empty="Conflicts: 0",
+                ),
+                _popup_text(
+                    "Judge output",
+                    self.judge_lines(),
+                    empty="No judge output.",
+                ),
+            ],
+        }
+
+    def _judge_status_by_target(self) -> dict[str, str]:
+        """The judge's answer per conflict anchor, when it answered one."""
+        judge = _mapping((self._review or {}).get("judge"))
+        resolved: dict[str, str] = {}
+        for judgment in judge.get("judgments") or ():
+            if not isinstance(judgment, Mapping):
+                continue
+            conflict = _mapping(judgment.get("conflict"))
+            decision = _mapping(judgment.get("decision"))
+            target = str(conflict.get("target") or "")
+            if target:
+                resolved[target] = (
+                    f"{decision.get('status') or '-'} "
+                    f"({decision.get('id') or '-'})"
+                )
+        return resolved
+
+    def advisor_popup(self, index: int) -> dict[str, Any]:
+        """One advisor's complete read-only result - everything the pane omits.
+
+        The credential is absent by construction: the panel data holds no key, no
+        request header and no raw provider response body, so there is nothing here
+        that could leak one.
+        """
+        panels = self.provider_panels()
+        if not 0 <= index < len(panels):
+            return {
+                "title": "Advisor details",
+                "note": "That advisor pane does not exist in this session.",
+                "sections": [_popup_text("Details", (), empty="No advisor.")],
+            }
+        panel = panels[index]
+        facts = [
+            [str(row[0]), str(row[1])]
+            for row in (panel.get("facts") or ())
+            if len(tuple(row)) >= 2
+        ]
+        return {
+            "title": f"{panel.get('name') or 'Advisor'} - details",
+            "note": (
+                "Read-only advisor result. No API key, no Authorization header and "
+                "no raw provider response body is shown: the panel never receives "
+                "any of them."
+            ),
+            "sections": [
+                _popup_table(
+                    "Advisor", POPUP_FACT_COLUMNS, facts, empty="Not run yet."
+                ),
+                _popup_text(
+                    "Finding text",
+                    [str(panel.get("response"))] if panel.get("response") else [],
+                    empty="This advisor produced no finding text.",
+                ),
+                _popup_table(
+                    "Evidence references",
+                    POPUP_FACT_COLUMNS,
+                    [
+                        [f"Evidence {position + 1}", str(item)]
+                        for position, item in enumerate(panel.get("evidence") or ())
+                    ],
+                    empty="No evidence reference was reported.",
+                ),
+                _popup_text(
+                    "Result detail",
+                    panel.get("body_lines") or (),
+                    empty="No result detail.",
+                ),
+            ],
+        }
 
     # -- the view model ----------------------------------------------------
 
@@ -2472,6 +3679,14 @@ def _short(value: Any) -> str:
     return text[:16] if text else "-"
 
 
+def _brief(value: Any, limit: int = 180) -> str:
+    """One compact, single-line excerpt for a pane's summary line."""
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(limit - 1, 1)].rstrip() + "…"
+
+
 def _yes(value: Any) -> str:
     """A tri-state boolean as the operator reads it."""
     if value is None:
@@ -2589,6 +3804,10 @@ def _provider_panel(stage: Mapping[str, Any]) -> dict[str, Any]:
         "status": status,
         "status_text": _status_text(status),
         "level": _status_level(status),
+        "severity": str(finding.get("severity") or "-"),
+        "relation": str(stage.get("relation") or "-"),
+        "anchor": str(stage.get("relation_target") or "-"),
+        "summary": _brief(response),
         "reason": reason,
         "response": response,
         "evidence": evidence,
@@ -2607,6 +3826,10 @@ def _idle_panel(name: str, index: int) -> dict[str, Any]:
         "status": "",
         "status_text": "not run yet",
         "level": "INFO",
+        "severity": "-",
+        "relation": "-",
+        "anchor": "-",
+        "summary": "",
         "reason": "",
         "response": "",
         "evidence": [],
@@ -2694,6 +3917,78 @@ def _join_blocking(rows: Any) -> str:
         if isinstance(row, Mapping)
     ]
     return ", ".join(parts) or "-"
+
+
+def _popup_section(
+    title: str,
+    *,
+    columns: Sequence[Sequence[Any]] = (),
+    rows: Sequence[Sequence[Any]] = (),
+    lines: Sequence[Any] = (),
+    empty: str = "",
+) -> dict[str, Any]:
+    """One popup section: a table when ``columns`` is set, else a text block.
+
+    The shape is fixed and always plain data - a popup is a *spec*, never a
+    widget - and every cell is a string, so the payload survives a JSON round trip
+    and can be asserted without a display. A section whose lines are all blank
+    counts as *no* lines, so a single empty string never replaces the section's
+    documented empty state with a blank pane.
+    """
+    cleaned_lines = [str(line) for line in lines]
+    if not any(line.strip() for line in cleaned_lines):
+        cleaned_lines = []
+    return {
+        "title": str(title),
+        "columns": [list(column) for column in columns],
+        "rows": [[str(cell) for cell in row] for row in rows],
+        "lines": cleaned_lines,
+        "empty": str(empty),
+    }
+
+
+def _popup_table(
+    title: str,
+    columns: Sequence[Sequence[Any]],
+    rows: Sequence[Sequence[Any]],
+    *,
+    empty: str = "No entries.",
+) -> dict[str, Any]:
+    """A popup table section, with a documented empty state."""
+    return _popup_section(title, columns=columns, rows=rows, empty=empty)
+
+
+def _popup_text(
+    title: str,
+    lines: Sequence[Any],
+    *,
+    empty: str = "Nothing to show.",
+) -> dict[str, Any]:
+    """A popup text section, with a documented empty state."""
+    return _popup_section(title, lines=lines, empty=empty)
+
+
+def _lines_of(value: Any) -> list[str]:
+    """A list of non-empty strings from a list, or ``[]`` when there is none."""
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        return []
+    return [str(item) for item in value if str(item).strip()]
+
+
+def _reason_of(detail: str) -> str:
+    """The ``reason`` recorded inside an audit detail payload, or ``-``.
+
+    The detail is the JSON string the audit trail itself stores, so this reads
+    exactly what was recorded - it never guesses a reason that was not written.
+    """
+    try:
+        payload = json.loads(detail)
+    except (TypeError, ValueError):
+        return "-"
+    if not isinstance(payload, Mapping):
+        return "-"
+    reason = payload.get("reason")
+    return str(reason) if isinstance(reason, str) and reason.strip() else "-"
 
 
 def _error_text(report: Any) -> str:

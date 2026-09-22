@@ -31,6 +31,7 @@ from .root import (
     DEFAULT_REPORT_DIR,
     DEFAULT_REVIEW_QUESTION,
     DEFAULT_SOURCE_ROOT,
+    apply_provider_settings,
     EVENT_LEVEL_ERROR,
     EVENT_LEVEL_INFO,
     EVENT_LEVEL_WARN,
@@ -58,6 +59,35 @@ from .evidence import (
     ERROR_REASON_PREFIX,
     observe,
 )
+from ..ports.capabilities import ConnectionStatus
+from .advisor_factory import (
+    PROVIDER_DEFAULT_MODELS,
+    AdvisorFactory,
+    assemble_reviewers,
+    default_model_for,
+    probe_connection,
+    provider_catalog,
+)
+from .provider_settings import (
+    ADVISOR_KEYS,
+    DEFAULT_PROVIDER_BY_ADVISOR,
+    DEFAULT_PROVIDER_SETTINGS_PATH,
+    MASKED_KEY,
+    PROVIDER_LABELS,
+    PROVIDER_SETTINGS_FILENAME,
+    SETTINGS_STATUS_DEFAULTS,
+    SETTINGS_STATUS_INVALID,
+    SETTINGS_STATUS_LOADED,
+    SETTINGS_STATUS_TEXTS,
+    SUPPORTED_PROVIDERS,
+    ProviderSelection,
+    ProviderSettings,
+    ProviderSettingsLoad,
+    default_provider_settings,
+    load_provider_settings,
+    save_provider_settings,
+    settings_from_mapping,
+)
 
 __all__ = [
     "Composition",
@@ -69,6 +99,7 @@ __all__ = [
     "DEFAULT_SOURCE_ROOT",
     "DEFAULT_REPORT_DIR",
     "DEFAULT_REVIEW_QUESTION",
+    "apply_provider_settings",
     # the log-event contract (Step 27)
     "EVENT_LEVELS",
     "EVENT_LEVEL_INFO",
@@ -100,4 +131,32 @@ __all__ = [
     "ADVISOR_ERRORS",
     "ABSTAIN_REASON_PREFIX",
     "ERROR_REASON_PREFIX",
+    # the provider vocabulary shared by the factory and the panel
+    "ConnectionStatus",
+    # the composition-level advisor factory
+    "AdvisorFactory",
+    "PROVIDER_DEFAULT_MODELS",
+    "assemble_reviewers",
+    "default_model_for",
+    "probe_connection",
+    "provider_catalog",
+    # per-advisor provider settings (which provider/model/key each slot uses)
+    "ADVISOR_KEYS",
+    "DEFAULT_PROVIDER_BY_ADVISOR",
+    "DEFAULT_PROVIDER_SETTINGS_PATH",
+    "MASKED_KEY",
+    "PROVIDER_LABELS",
+    "PROVIDER_SETTINGS_FILENAME",
+    "SETTINGS_STATUS_DEFAULTS",
+    "SETTINGS_STATUS_INVALID",
+    "SETTINGS_STATUS_LOADED",
+    "SETTINGS_STATUS_TEXTS",
+    "SUPPORTED_PROVIDERS",
+    "ProviderSelection",
+    "ProviderSettings",
+    "ProviderSettingsLoad",
+    "default_provider_settings",
+    "load_provider_settings",
+    "save_provider_settings",
+    "settings_from_mapping",
 ]

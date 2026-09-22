@@ -2,17 +2,17 @@
 
 The operator panel is laid out with splitters, so *how* it looks is the
 operator's decision: the window size and position, the sash position of every
-splitter, and the tab that was open. This module is the only place that reads
-or writes those preferences.
+splitter, the tab that was open, and the size and position of each popup window.
+This module is the only place that reads or writes those preferences.
 
 Three rules shape it:
 
-* **presentation only.** A layout holds numbers and one tab title - nothing an
-  action needs. It never holds an operator name, a token, a path, a project, a
-  step or any other secret or domain state, and it never goes into the
-  assistant's SQLite source of truth: a *preference* is not domain state, the
-  core must be able to run with no layout file at all, and a corrupt file must
-  never be able to reach the workflow.
+* **presentation only.** A layout holds numbers, one tab title and one geometry
+  per popup title - nothing an action needs. It never holds an operator name, a
+  token, a path, a project, a step or any other secret or domain state, and it
+  never goes into the assistant's SQLite source of truth: a *preference* is not
+  domain state, the core must be able to run with no layout file at all, and a
+  corrupt file must never be able to reach the workflow.
 * **fail-safe.** A missing, unreadable or hand-mangled file is worth exactly
   one thing: the panel's default layout. Every function here either returns
   validated data or answers "nothing to restore"; nothing in this module can
@@ -40,6 +40,7 @@ __all__ = [
     "DEFAULT_LAYOUT_PATH",
     "LAYOUT_FILENAME",
     "LAYOUT_VERSION",
+    "MAX_POPUPS",
     "MAX_SASH_POSITION",
     "MAX_SASHES",
     "MAX_SPLIT_NAME",
@@ -78,6 +79,14 @@ MAX_WINDOW_OFFSET = 100_000
 #: The most sashes one splitter can have, and the largest believable position.
 MAX_SASHES = 8
 MAX_SASH_POSITION = 100_000
+
+#: How many popup windows are remembered. The cap is deliberately larger than the
+#: number of windows the panel can open (thirteen: logs, audit, risks, reports,
+#: cost, the judge, the conflicts, three advisor details, the supervisor, the
+#: project and the architecture details), so opening every one of them still
+#: remembers every one of them. The *names* are the popup titles, which are stable
+#: strings, so a remembered size is matched to a window by title.
+MAX_POPUPS = 16
 
 #: The longest splitter name and tab title the file may carry.
 MAX_SPLIT_NAME = 64
@@ -163,6 +172,35 @@ def normalise_layout(raw: Any) -> dict[str, Any]:
     sashes = _clean_sashes(raw.get("sashes"))
     if sashes:
         cleaned["sashes"] = sashes
+    windows = _clean_windows(raw.get("windows"))
+    if windows:
+        cleaned["windows"] = windows
+    return cleaned
+
+
+def _clean_windows(value: Any) -> dict[str, str]:
+    """Every remembered popup geometry that is usable as it is.
+
+    A popup is remembered *by its title* - a stable string, never a widget path -
+    and only by the same validated ``WxH[+X+Y]`` shape the main window uses. A
+    title that is not printable, a geometry Tk could not accept, or more entries
+    than the cap are all simply dropped: a damaged preference costs the operator
+    one popup's position and nothing else.
+    """
+    if not isinstance(value, Mapping):
+        return {}
+    cleaned: dict[str, str] = {}
+    for title, geometry in value.items():
+        if not isinstance(title, str) or not title:
+            continue
+        if len(title) > MAX_TAB_TITLE or not title.isprintable():
+            continue
+        parsed = parse_geometry(geometry)
+        if parsed is None:
+            continue
+        if len(cleaned) >= MAX_POPUPS:
+            break
+        cleaned[title] = format_geometry(*parsed)
     return cleaned
 
 
@@ -240,7 +278,7 @@ def save_layout(path: Any, layout: Any) -> bool:
     the operator keeps the layout they had, and the panel keeps running.
     """
     data = normalise_layout(layout)
-    if not {"geometry", "tab", "sashes"} & data.keys():
+    if not {"geometry", "tab", "sashes", "windows"} & data.keys():
         return False  # nothing worth a file: no window to remember yet
     target = Path(path)
     temporary = target.with_name(f"{target.name}.tmp")

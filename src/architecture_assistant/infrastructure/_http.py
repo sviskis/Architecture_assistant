@@ -33,7 +33,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional, Sequence
 
-from ..ports.capabilities import CostIdentityUnavailableError
+from ..ports.capabilities import ConnectionStatus, CostIdentityUnavailableError
 
 __all__ = [
     "DEFAULT_TIMEOUT_SECONDS",
@@ -83,6 +83,38 @@ def is_retryable_status(status_code: int) -> bool:
     return (
         status_code == HTTP_TOO_MANY_REQUESTS or status_code >= HTTP_SERVER_ERROR
     )
+
+
+def _classify_connection_status(status_code: int) -> "ConnectionStatus":
+    """Map one HTTP status of a minimal, authenticated probe to a verdict.
+
+    This is the *mechanical* half of the Test Connection capability, and it is
+    shared for the same reason :func:`is_retryable_status` is: every provider
+    adapter would otherwise repeat it. The *probe* itself - the endpoint, the
+    auth header scheme, the model reference and the request body - stays in each
+    provider adapter, because that is the provider-shaped part.
+
+    The probe always references the configured model, which is what makes
+    ``MODEL ERROR`` distinguishable from ``CONNECTED``: in a well-formed minimal
+    request the model is the only input a provider can reject with a 4xx that is
+    not an authentication failure.
+
+    * ``2xx`` -> ``CONNECTED``
+    * ``401`` / ``403`` -> ``AUTH ERROR``
+    * ``400`` / ``404`` / ``422`` -> ``MODEL ERROR``
+    * ``429`` / any ``5xx`` -> ``PROVIDER ERROR``
+    * anything else -> ``PROVIDER ERROR`` (an unexpected status is not the
+      operator's configuration being wrong, so it is never blamed on the model)
+    """
+    if isinstance(status_code, bool) or not isinstance(status_code, int):
+        raise ValueError(f"status_code must be an int; got {status_code!r}")
+    if 200 <= status_code < 300:
+        return ConnectionStatus.CONNECTED
+    if status_code in (401, 403):
+        return ConnectionStatus.AUTH_ERROR
+    if status_code in (400, 404, 422):
+        return ConnectionStatus.MODEL_ERROR
+    return ConnectionStatus.PROVIDER_ERROR
 
 
 class HttpTransportError(Exception):

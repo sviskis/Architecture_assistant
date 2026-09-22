@@ -217,8 +217,20 @@ class TestPayload:
             # read-only advisor configuration, so the review tab can label its
             # three panes before the operator has paid for a review
             "reviewers",
+            # the per-advisor provider configuration the panes show and edit -
+            # key-free: a stored credential is reported as a flag plus a mask
+            "provider_settings",
         }
         assert payload["reviewers"] == ["OpenAI", "Claude", "Grok"]
+        assert set(payload["provider_settings"]) == {
+            "advisors",
+            "order",
+            "catalog",
+            "status",
+            "status_text",
+            "valid",
+            "path",
+        }
         assert set(payload["canonical"]) == {
             "schema_version",
             "generated_at",

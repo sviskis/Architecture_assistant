@@ -26,15 +26,23 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Optional
 
 from architecture_assistant.composition import (
+    ADVISOR_KEYS,
     EVENT_LEVEL_ERROR,
     EVENT_LEVEL_INFO,
     EVENT_LEVEL_WARN,
+    SETTINGS_STATUS_INVALID,
+    SETTINGS_STATUS_TEXTS,
     Composition,
     CompositionConfig,
+    apply_provider_settings,
     build_event,
     component_for,
     compose,
     exception_reason,
+    probe_connection,
+    provider_catalog,
+    save_provider_settings,
+    settings_from_mapping,
 )
 
 __all__ = [
@@ -261,12 +269,111 @@ class CoreWorker:
                 component_for(reviewer.source)
                 for reviewer in composition.architecture_review.reviewers
             ],
+            #: The provider configuration each advisor pane shows and edits. It
+            #: is key-free: a stored credential is reported as boolean ``key_set``
+            #: plus a mask, never as a value, so no key can reach a widget, the
+            #: logs, the audit trail or a report through this payload.
+            "provider_settings": self._provider_settings_payload(composition),
             "paths": {
                 "database_path": str(composition.config.database_path),
                 "exchange_dir": str(composition.config.exchange_dir),
                 "report_dir": str(composition.config.report_dir),
                 "source_root": str(composition.config.source_root),
             },
+        }
+
+    # -- per-advisor provider configuration --------------------------------
+
+    def _provider_settings_payload(self, composition: Composition) -> dict[str, Any]:
+        """The live provider configuration, as plain key-free data.
+
+        It carries the per-slot provider/model/``key_set`` view, the catalog of
+        what the operator may choose, and the load status (including the explicit
+        "provider settings invalid" wording). The credentials themselves stay in
+        the composition and in the settings file - never here.
+        """
+        status = str(composition.provider_settings_status)
+        return {
+            "advisors": composition.provider_settings.to_view(),
+            "order": list(ADVISOR_KEYS),
+            "catalog": [dict(option) for option in provider_catalog()],
+            "status": status,
+            "status_text": SETTINGS_STATUS_TEXTS.get(status, status),
+            "valid": status != SETTINGS_STATUS_INVALID,
+            "path": str(composition.config.provider_settings_path),
+        }
+
+    def provider_settings_view(self) -> dict[str, Any]:
+        """The provider configuration alone - for a save that changed nothing."""
+        return self._provider_settings_payload(self._core())
+
+    def save_provider_settings(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        """Persist one provider configuration and re-wire the review.
+
+        The panel sends plain data per advisor slot: the provider, the model and
+        an ``api_key`` that is either the typed value or ``None`` for "keep the
+        stored one" (the panel never receives a stored key, so it must be able to
+        save the rest of the form without retyping a secret).
+
+        Saving is honest in both directions: the file is written atomically, and
+        the running review is only re-wired when the write actually succeeded -
+        so what the panel shows and what the next start reads can never diverge.
+        """
+        composition = self._core()
+        if not isinstance(payload, Mapping):
+            raise CoreError(f"provider settings must be a mapping; got {payload!r}")
+        current = composition.provider_settings
+        merged: dict[str, dict[str, str]] = {}
+        for key in ADVISOR_KEYS:
+            entry = payload.get(key)
+            entry = entry if isinstance(entry, Mapping) else {}
+            stored = current.selection(key)
+            provider = entry.get("provider", stored.provider)
+            model = entry.get("model", stored.model)
+            typed_key = entry.get("api_key", None)
+            merged[key] = {
+                "provider": str(provider),
+                "model": "" if model is None else str(model),
+                # ``None`` means "keep what is stored" - never an empty key
+                "api_key": stored.api_key if typed_key is None else str(typed_key),
+            }
+        settings = settings_from_mapping(merged)
+        written = save_provider_settings(
+            composition.config.provider_settings_path, settings
+        )
+        if written:
+            apply_provider_settings(composition, settings)
+        return {
+            "saved": written,
+            "path": str(composition.config.provider_settings_path),
+            "provider_settings": self._provider_settings_payload(composition),
+        }
+
+    def test_connection(
+        self,
+        advisor: str,
+        provider: str,
+        model: str = "",
+        api_key: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """One Test Connection verdict for one advisor pane - plain data out.
+
+        It performs the smallest safe provider call the adapter implements and
+        answers with exactly one status: ``CONNECTED``, ``AUTH ERROR``,
+        ``PROVIDER ERROR``, ``NETWORK ERROR``, ``MODEL ERROR`` - or ``DISABLED``
+        for the disabled advisor, which makes no call at all. A blank key falls
+        back to the stored one, so testing a saved configuration needs no retyping.
+        Nothing here ever returns a credential, a header or a response body.
+        """
+        composition = self._core()
+        credential = api_key
+        if not credential and advisor in ADVISOR_KEYS:
+            credential = composition.provider_settings.selection(advisor).api_key
+        status = probe_connection(str(provider), str(model or ""), credential)
+        return {
+            "advisor": str(advisor),
+            "provider": str(provider),
+            "status": status,
         }
 
     def audit_tail(self, limit: Optional[int] = None) -> list[dict[str, Any]]:

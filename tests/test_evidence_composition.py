@@ -31,11 +31,16 @@ from architecture_assistant.domain.enums import DecisionStatus, Severity
 from architecture_assistant.domain.models import Decision, Finding
 from architecture_assistant.infrastructure import (
     CLAUDE_API_KEY_ENV_VAR,
+    DEEPSEEK_API_KEY_ENV_VAR,
     OPENAI_API_KEY_ENV_VAR,
     XAI_API_KEY_ENV_VAR,
     ClaudeAdvisorAbstainError,
     ClaudeAdvisorAdapter,
     ClaudeAdvisorHttpError,
+    DeepSeekAdvisorAbstainError,
+    DeepSeekAdvisorError,
+    DisabledAdvisorAbstainError,
+    DisabledAdvisorError,
     GrokAdvisorAbstainError,
     GrokAdvisorAdapter,
     GrokAdvisorTimeoutError,
@@ -251,6 +256,13 @@ class TestObserve:
         self,
     ) -> None:
         for abstain_error in ABSTAIN_ERRORS:
+            if abstain_error is DisabledAdvisorAbstainError:
+                # The one deliberate exception. A disabled slot has *no* provider
+                # to fail, so its abstention belongs to no provider family - it is
+                # still an abstention (never an ERROR), it simply is not a more
+                # specific kind of provider failure.
+                assert issubclass(abstain_error, DisabledAdvisorError)
+                continue
             assert issubclass(abstain_error, ADVISOR_ERRORS)
 
 
@@ -382,12 +394,24 @@ class TestRealAdapters:
             "OpenAIAdvisorError",
             "ClaudeAdvisorError",
             "GrokAdvisorError",
+            # every provider adapter the composition can wire is classified
+            "DeepSeekAdvisorError",
         }
         assert {error.__name__ for error in ABSTAIN_ERRORS} == {
             "OpenAIAdvisorAbstainError",
             "ClaudeAdvisorAbstainError",
             "GrokAdvisorAbstainError",
+            "DeepSeekAdvisorAbstainError",
+            # a disabled slot abstains without ever calling a provider
+            "DisabledAdvisorAbstainError",
         }
+        # the disabled advisor's *base* error is deliberately not a provider
+        # family: there is no provider to fail, so a defect there is still
+        # classified through its own abstain error above
+        assert issubclass(DisabledAdvisorAbstainError, DisabledAdvisorError)
+
+    def test_the_deepseek_abstain_is_more_specific_than_its_family(self) -> None:
+        assert issubclass(DeepSeekAdvisorAbstainError, DeepSeekAdvisorError)
 
     def test_the_reason_prefixes_are_stable(self) -> None:
         assert ABSTAIN_REASON_PREFIX == "advisor abstained"
@@ -399,6 +423,7 @@ class TestRealAdapters:
             OPENAI_API_KEY_ENV_VAR,
             CLAUDE_API_KEY_ENV_VAR,
             XAI_API_KEY_ENV_VAR,
+            DEEPSEEK_API_KEY_ENV_VAR,
         ):
             monkeypatch.setenv(env_var, "literal-value")
             assert env_var

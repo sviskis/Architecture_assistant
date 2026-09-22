@@ -48,6 +48,33 @@ from .cline import (
     TaskDispatchError,
 )
 from .cost import SqliteCostPlugin
+from .deepseek import (
+    DEEPSEEK_API_KEY_ENV_VAR,
+    DEEPSEEK_CHAT_COMPLETIONS_URL,
+    DEEPSEEK_MODEL_ENV_VAR,
+    DEEPSEEK_PROVIDER,
+    DEFAULT_DEEPSEEK_MAX_OUTPUT_TOKENS,
+    DEFAULT_DEEPSEEK_MODEL,
+    INDEPENDENT_REVIEWER_ROLE,
+    DeepSeekAdvisorAbstainError,
+    DeepSeekAdvisorAdapter,
+    DeepSeekAdvisorError,
+    DeepSeekAdvisorHttpError,
+    DeepSeekAdvisorInvalidResponseError,
+    DeepSeekAdvisorRateLimitError,
+    DeepSeekAdvisorTimeoutError,
+    DeepSeekAdvisorTransportError,
+    DeepSeekMissingApiKeyError,
+    resolve_deepseek_model,
+)
+from .disabled import (
+    DISABLED_PROVIDER,
+    DISABLED_REASON,
+    DISABLED_ROLE,
+    DisabledAdvisorAbstainError,
+    DisabledAdvisorAdapter,
+    DisabledAdvisorError,
+)
 from .excel_reporting import SHEET_NAMES, ExcelReportingAdapter
 from .grok import (
     CHALLENGER_ROLE,
@@ -269,6 +296,31 @@ __all__ = [
     "XAI_API_KEY_ENV_VAR",
     "DEFAULT_GROK_MAX_OUTPUT_TOKENS",
     "resolve_grok_model",
+    # DeepSeek advisor adapter (independent AdvisorPort implementation)
+    "DeepSeekAdvisorAdapter",
+    "DeepSeekAdvisorError",
+    "DeepSeekMissingApiKeyError",
+    "DeepSeekAdvisorTransportError",
+    "DeepSeekAdvisorTimeoutError",
+    "DeepSeekAdvisorRateLimitError",
+    "DeepSeekAdvisorHttpError",
+    "DeepSeekAdvisorInvalidResponseError",
+    "DeepSeekAdvisorAbstainError",
+    "DEEPSEEK_PROVIDER",
+    "INDEPENDENT_REVIEWER_ROLE",
+    "DEFAULT_DEEPSEEK_MODEL",
+    "DEEPSEEK_MODEL_ENV_VAR",
+    "DEEPSEEK_CHAT_COMPLETIONS_URL",
+    "DEEPSEEK_API_KEY_ENV_VAR",
+    "DEFAULT_DEEPSEEK_MAX_OUTPUT_TOKENS",
+    "resolve_deepseek_model",
+    # the disabled advisor (an explicit "no provider" AdvisorPort)
+    "DisabledAdvisorAdapter",
+    "DisabledAdvisorError",
+    "DisabledAdvisorAbstainError",
+    "DISABLED_PROVIDER",
+    "DISABLED_ROLE",
+    "DISABLED_REASON",
     # OpenAI judge adapter (Step 16)
     "OpenAIJudgeAdapter",
     "EVIDENCE_JUDGE_ROLE",

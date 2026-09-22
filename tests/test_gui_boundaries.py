@@ -143,12 +143,15 @@ class TestDependencyDirection:
         assert result.is_compliant is True
         assert result.violations == ()
         assert result.baseline_version == ARCHITECTURE_CURRENT.version
-        # The frozen core: 65 modules (Step 25 added the plan loader, Step 26 the
+        # The frozen core: 69 modules (Step 25 added the plan loader, Step 26 the
         # advisory architecture review, Step 27 the log-event contract and the
         # managed-project proposal pair, Step 28 the advisory supervision quartet:
         # the policy, the use-case with its gate, the headless runtime and the
-        # offline scripted supervisor), three rules, baseline 1.1.
-        assert len(source.modules()) == 65
+        # offline scripted supervisor; the provider-settings step added the
+        # per-advisor provider configuration, its composition-level advisor
+        # factory, the DeepSeek advisor adapter and the disabled advisor),
+        # three rules, baseline 1.1.
+        assert len(source.modules()) == 69
         assert len(ArchitectureValidator().baseline.rules) == 3
 
 
@@ -179,11 +182,15 @@ class TestNoWritePath:
 
     def test_both_human_write_paths_stay_in_the_core(self) -> None:
         """The GUI calls the core's human paths; it owns neither of them."""
-        from architecture_assistant_gui.controller import INTENTS
+        from architecture_assistant_gui.controller import (
+            DISPLAY_INTENTS,
+            INTENTS,
+        )
 
         keys = {intent.key for intent in INTENTS}
+        workflow = keys - DISPLAY_INTENTS
 
-        assert keys == {
+        assert workflow == {
             "load_plan",
             "import_plan",
             "run_review",
@@ -203,13 +210,37 @@ class TestNoWritePath:
             "export_excel",
             "open_reports_folder",
             "refresh",
-            "view_snapshot",
             "reconnect",
             "analyze_report",
             "approve_and_send",
             "reject_directive",
             "waive_supervision",
             "escalate_supervision",
+            # the per-advisor provider settings header: it writes one local
+            # preference file and probes a provider - no workflow state at all
+            "save_settings",
+            "test_connection_1",
+            "test_connection_2",
+            "test_connection_3",
+        }
+        # The rest only *displays* the last payload: one window each, no core work
+        # and no write. A popup can therefore never become a second write path.
+        assert DISPLAY_INTENTS == {
+            "view_snapshot",
+            "clear_logs",
+            "cost_details",
+            "open_logs",
+            "open_audit",
+            "open_risks",
+            "open_reports",
+            "project_details",
+            "architecture_details",
+            "supervisor_technical",
+            "review_judge_details",
+            "review_conflict_details",
+            "advisor_details_1",
+            "advisor_details_2",
+            "advisor_details_3",
         }
         # Every mutating action is one core call, spelled out in the controller.
         actions = (GUI_ROOT / "controller.py").read_text(encoding="utf-8")
@@ -387,7 +418,33 @@ class TestWidgetModule:
         from architecture_assistant_gui import views
 
         assert views.MainWindow is not None
-        assert [heading for _key, heading, _width in views.AUDIT_COLUMNS]
+        assert [heading for _key, heading, _width in views.FACT_COLUMNS]
+        assert [heading for _key, heading, _width in views.COMPACT_FACT_COLUMNS]
+
+    def test_the_popup_module_imports(self) -> None:
+        pytest.importorskip("tkinter")
+        from architecture_assistant_gui import windows
+
+        assert callable(windows.open_popup)
+        assert windows.POPUP_MIN_WIDTH > 0
+        assert windows.POPUP_MIN_HEIGHT > 0
+
+    def test_the_popup_module_imports_only_tk_and_the_stdlib(self) -> None:
+        """The popup renderer is presentation only, like the widget module."""
+        roots: set[str] = set()
+        for node in ast.walk(ast.parse((GUI_ROOT / "windows.py").read_text("utf-8"))):
+            if isinstance(node, ast.Import):
+                roots.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                if node.level:
+                    roots.add(f".{node.module or ''}")
+                elif node.module:
+                    roots.add(node.module.split(".")[0])
+
+        assert roots == {"__future__", "tkinter", "typing"}
+        assert not any(
+            name.startswith("architecture_assistant.") for name in roots
+        )
 
     def test_the_application_module_imports_without_a_display(self) -> None:
         from architecture_assistant_gui import app

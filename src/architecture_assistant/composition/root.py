@@ -35,7 +35,6 @@ from ..application import (
     EVENT_LEVEL_WARN,
     EVENT_LEVELS,
     LOG_COMPONENTS,
-    AdvisorReviewer,
     ApprovalGate,
     ArchitectureBootstrap,
     ArchitectureEvolution,
@@ -87,6 +86,7 @@ from ..infrastructure import (
     open_database,
 )
 from ..ports.capabilities import (
+    AdvisorPort,
     CanonicalBaseline,
     CostPort,
     JudgePort,
@@ -100,6 +100,14 @@ from .evolution import (
 )
 from .evidence import observe
 from .realization import ArchitectureRealizationAdapter
+from .advisor_factory import AdvisorFactory, assemble_reviewers
+from .provider_settings import (
+    DEFAULT_PROVIDER_SETTINGS_PATH,
+    SETTINGS_STATUS_LOADED,
+    ProviderSettings,
+    ProviderSettingsLoad,
+    load_provider_settings,
+)
 
 __all__ = [
     "CompositionConfig",
@@ -107,6 +115,8 @@ __all__ = [
     "DEFAULT_SOURCE_ROOT",
     "DEFAULT_REPORT_DIR",
     "DEFAULT_REVIEW_QUESTION",
+    "DEFAULT_PROVIDER_SETTINGS_PATH",
+    "apply_provider_settings",
     "EVENT_LEVELS",
     "EVENT_LEVEL_INFO",
     "EVENT_LEVEL_WARN",
@@ -192,6 +202,11 @@ class CompositionConfig:
     #: Bounded operator constraints handed to a supervisor as **facts** (never a
     #: chat history, never a secret). Empty by default.
     operator_constraints: tuple[str, ...] = ()
+    #: Where each advisor's provider/model/key is remembered. A local preference
+    #: (Git-ignored ``data/``), never domain state, never in the database. A
+    #: missing file means the documented defaults (OpenAI, Claude, Grok) and a
+    #: malformed one means the same defaults plus an explicit "invalid" report.
+    provider_settings_path: Union[str, Path] = DEFAULT_PROVIDER_SETTINGS_PATH
 
     def __post_init__(self) -> None:
         if not callable(self.clock):
@@ -366,6 +381,17 @@ class Composition:
     #: valid conflict, and a JSON-safe result. It writes nothing, changes no
     #: workflow state and can never reach ``VERIFIED``.
     architecture_review: ArchitectureReview
+
+    #: The provider configuration this graph was wired with: which provider,
+    #: which model and which (local) key each advisor slot uses. It is held so
+    #: the panel can show the live configuration and so a saved change can
+    #: re-wire the review without recomposing the whole assistant. It is
+    #: configuration, never state: nothing here is persisted, audited, reported
+    #: or copied into a Finding, a Decision or an ArchitectureReviewResult.
+    provider_settings: ProviderSettings
+    #: How that configuration was obtained: loaded, missing (defaults) or
+    #: invalid (defaults + "provider settings invalid"). Displayed, never acted on.
+    provider_settings_status: str
 
     #: The **managed-project** architecture proposal generator: the one path
     #: from one advisory review to one durable, project-scoped design. It is
@@ -550,17 +576,33 @@ def compose(config: Optional[CompositionConfig] = None) -> Composition:
     #    decision maker and an advisor only explains. There is no majority vote
     #    and no provider ranking here: the three advisors stay independent and
     #    never vote.
-    openai_advisor = OpenAIAdvisorAdapter(
+    #    Which provider, model and key each advisor slot uses is the operator's
+    #    *local* configuration (``data/provider_settings.json``): read exactly
+    #    here, and nowhere else. The read cannot fail - a missing file means the
+    #    documented defaults (OpenAI, Claude, Grok, i.e. the wiring this graph had
+    #    before the file existed) and a malformed one means the same defaults plus
+    #    an explicit "invalid" status the panel reports.
+    provider_settings_load: ProviderSettingsLoad = load_provider_settings(
+        resolved.provider_settings_path
+    )
+    provider_settings = provider_settings_load.settings
+    #    These three are the composition's canonical capability handles. A default
+    #    advisor slot reuses exactly these instances (see ``assemble_reviewers``),
+    #    so one provider is one adapter object - never a second, parallel one.
+    openai_advisor = AdvisorFactory.create(
+        "openai",
         project=resolved.project_name,
         cost_sink=cost_plugin,
         clock=resolved.clock,
     )
-    claude_advisor = ClaudeAdvisorAdapter(
+    claude_advisor = AdvisorFactory.create(
+        "claude",
         project=resolved.project_name,
         cost_sink=cost_plugin,
         clock=resolved.clock,
     )
-    grok_advisor = GrokAdvisorAdapter(
+    grok_advisor = AdvisorFactory.create(
+        "grok",
         project=resolved.project_name,
         cost_sink=cost_plugin,
         clock=resolved.clock,
@@ -671,12 +713,13 @@ def compose(config: Optional[CompositionConfig] = None) -> Composition:
     #     evidence conflict can exist by default. The check is the read-only
     #     realization adapter: it validates freshly and persists nothing, so the
     #     review can report the deterministic verdict without ever writing it.
-    architecture_review = ArchitectureReview(
-        tuple(
-            AdvisorReviewer(source=advisor.provider, advisor=advisor)
-            for advisor in (openai_advisor, claude_advisor, grok_advisor)
+    architecture_review = _build_architecture_review(
+        provider_settings,
+        canonical=_canonical_adapters(
+            openai_advisor, claude_advisor, grok_advisor
         ),
-        observer=observe,
+        project=resolved.project_name,
+        cost_sink=cost_plugin,
         source_root=resolved.source_root,
         judge=judge_use_case,
         check=realization_adapter,
@@ -751,10 +794,112 @@ def compose(config: Optional[CompositionConfig] = None) -> Composition:
         human_override=human_override,
         plan_loader=plan_loader,
         architecture_review=architecture_review,
+        provider_settings=provider_settings,
+        provider_settings_status=provider_settings_load.status,
         architecture_synthesis=architecture_synthesis,
         proposal_approval=proposal_approval,
         supervisor=supervisor,
         supervision=supervision,
         supervision_gate=supervision_gate,
         supervisor_runtime=supervisor_runtime,
+    )
+
+
+# ---------------------------------------------------------------------------
+# the advisory review wiring, keyed by the operator's provider configuration
+# ---------------------------------------------------------------------------
+
+
+def _canonical_adapters(
+    openai_advisor: AdvisorPort,
+    claude_advisor: AdvisorPort,
+    grok_advisor: AdvisorPort,
+) -> dict[str, AdvisorPort]:
+    """The composition's own provider handles, by provider id.
+
+    ``assemble_reviewers`` reuses one of these for a *default* slot, so the
+    composed review and the composition's advisor attributes are the same
+    objects - the capability exists once, not twice.
+    """
+    return {
+        "openai": openai_advisor,
+        "claude": claude_advisor,
+        "grok": grok_advisor,
+    }
+
+
+def _build_architecture_review(
+    settings: ProviderSettings,
+    *,
+    canonical: Mapping[str, AdvisorPort],
+    project: str,
+    cost_sink: CostPort,
+    source_root: Union[str, Path],
+    judge: JudgeUseCase,
+    check: Any,
+    cost_query: Callable[..., Any],
+    clock: Callable[[], datetime],
+) -> ArchitectureReview:
+    """The advisory review, wired from one provider configuration.
+
+    Wiring only: it builds one ``AdvisorReviewer`` per advisor slot from the
+    configuration and hands the review the *same* seams it has always had - the
+    provider-neutral observation seam, the judge, the read-only realization
+    check, the cost query, the source root and the clock. It contains no policy
+    and decides nothing.
+    """
+    return ArchitectureReview(
+        assemble_reviewers(
+            settings,
+            project=project,
+            cost_sink=cost_sink,
+            clock=clock,
+            shared=canonical,
+        ),
+        observer=observe,
+        source_root=source_root,
+        judge=judge,
+        check=check,
+        cost_query=cost_query,
+        clock=clock,
+    )
+
+
+def apply_provider_settings(
+    composition: "Composition", settings: ProviderSettings
+) -> None:
+    """Re-wire the advisory review for a new provider configuration.
+
+    Called when the operator saves provider settings. Only the *reviewers* can
+    change: every other seam of the review is reused unchanged, and nothing on
+    the deterministic side of the graph - the FSM, the realization gate, the
+    validator, the rules, the baseline and the audit trail - is touched, because
+    none of them is even reachable from here.
+
+    Re-wiring (rather than a global) is the point: the panel's configuration is
+    an explicit, local preference, and applying it must not be able to change
+    anything but which advisor answers which question.
+    """
+    if not isinstance(composition, Composition):
+        raise ValueError("composition must be a Composition")
+    if not isinstance(settings, ProviderSettings):
+        raise ValueError("settings must be a ProviderSettings")
+    composition.provider_settings = settings
+    # A saved configuration is, by definition, a loaded one - the panel must stop
+    # saying "invalid" the moment the operator has replaced the damaged file.
+    composition.provider_settings_status = SETTINGS_STATUS_LOADED
+    composition.architecture_review = _build_architecture_review(
+        settings,
+        canonical=_canonical_adapters(
+            composition.openai_advisor,
+            composition.claude_advisor,
+            composition.grok_advisor,
+        ),
+        project=composition.config.project_name,
+        cost_sink=composition.cost_plugin,
+        source_root=composition.config.source_root,
+        judge=composition.judge_use_case,
+        check=composition.realization_adapter,
+        cost_query=composition.cost_plugin.query,
+        clock=composition.config.clock,
     )

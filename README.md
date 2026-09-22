@@ -111,9 +111,27 @@ covered by tests.
   sanitized by contract, so no credential, authorization header or provider body
   can reach the panel, and clearing the view deletes nothing.
 - **Side-by-side advisor comparison** - the review tab shows the three advisors in
-  one window as three read-only panes (status, full finding text, structure,
-  evidence references, reason, tokens, cost) with the shared results - merged
-  evidence, conflicts, judge, advisory decision, total cost - directly below them.
+  one window as three read-only panes, each with its own provider, model, key and
+  connection controls and a **compact** summary (provider, model, execution
+  status, severity, relation, short finding summary); the full result - finding
+  id, confidence, anchor, step, evidence references, tokens, cost, the sanitized
+  provider error and the whole finding text - is one `Details...` click away. The
+  shared results stay below them: merged evidence, the conflict count, the judge
+  line, the advisory decision and the total cost.
+- **A popup for everything that is consulted, not worked in** - the main window
+  keeps four tabs (**Monitor**, **Architecture Review**, **Architecture
+  Proposal**, **Supervisor**) and one compact utility bar, and Logs, Audit, Risks,
+  Reports, cost detail, the judge, the evidence conflicts, every advisor's
+  technical result, the supervisor's technical details, the project details and
+  the architecture details open in their own window. Each window is a
+  `Toplevel` that is **resizable, scrollable and non-modal** (only a confirmation
+  dialog is modal), renders one plain-data spec the controller built from the last
+  projection, and never calls a repository, a provider or the core. Nothing was
+  removed by taking the tabs away: the same rows, from the same payload, are in
+  the popups - and an unused judge or an empty conflict list now costs one line
+  instead of a blank table. Popup size and position are remembered in the same
+  local layout file as the window and the sash positions.
+
 - **Advisory supervision (Step 28)** - an *optional*, fail-closed analysis of one
   worker report before the authoritative review. It is **off by default**; with
   it off the loop is exactly the pre-supervision loop, and the refusal is
@@ -165,6 +183,22 @@ covered by tests.
 - **Crash/restart recovery** - recovery from persisted state only, proven with
   real subprocess crashes, mid-transaction crashes and a full close/recreate of
   a file-backed database.
+- **Per-advisor provider settings** - each of the three advisor panes lets the
+  operator choose *which* provider it uses (**OpenAI**, **Claude**, **Grok**,
+  **DeepSeek** or **Disabled**), which **model**, and its **API key**, and to
+  test the configuration with **Test Connection** before saving it. The choice is
+  plain configuration, never architecture truth: it is resolved through one
+  composition-level `AdvisorFactory` (the panel knows no adapter class), it can
+  never touch the FSM, the gate, the baseline or the audit trail, and the
+  **Disabled** option is a real AdvisorPort that abstains on every question
+  **without any provider call**. Provider, model and key live in the local,
+  Git-ignored `data/provider_settings.json`; nothing about them is ever written
+  to SQLite, the audit trail, a report, a `Finding`, a `Decision`, an
+  `ArchitectureReviewResult`, an exception message or a log line. The key is
+  masked (`show="*"`) in the panel, is never read back into a widget, and
+  **Test Connection** answers with exactly one of `CONNECTED`, `AUTH ERROR`,
+  `PROVIDER ERROR`, `NETWORK ERROR`, `MODEL ERROR` (or `DISABLED`) - never a
+  status code, a header or a body.
 
 ---
 
@@ -657,9 +691,10 @@ architecture review, the operator log, the side-by-side advisor layout, the
 managed-project architecture proposal and the advisory supervision of a worker
 report:
 
-- **3026 passed / 0 failed** (`python -m pytest -q`)
+- **3385 passed / 0 failed** (`python -m pytest -q`; one display-dependent test
+  skips instead on a machine where Tk cannot open a window)
 - architecture self-check: baseline **1.1**, compliant **True**, **0**
-  violations, **65** modules, **3** architecture rules
+  violations, **69** modules, **3** architecture rules
 
 The plan loader, the architecture review, the log-event contract, the
 managed-project proposal pair (`architecture_synthesis.py` and
@@ -761,6 +796,20 @@ artifact, no supervision audit entry - while the enabled path stays unchanged.
   and can never be replayed into another outcome. The documented procedure is to
   inspect `from_cline/` after a restart or completion and, when the matching
   step is already `VERIFIED` or `ABORTED`, archive that file manually.
+- **Provider API keys are stored in a plain-text local file (temporary).** The
+  per-advisor provider configuration keeps its key in
+  `data/provider_settings.json` - a **local-only**, Git-ignored file beside the
+  operator's own database. That is a deliberate, temporary trade rather than a
+  credential-store claim: the file is readable by whoever can read the operator's
+  working copy, so the key is protected by *location and Git-ignore*, not by the
+  operating system. The design is isolated behind the `ProviderSelection` /
+  `ProviderSettings` value objects and the `save_provider_settings` /
+  `load_provider_settings` pair, so a real credential-store backend (for example
+  the Windows Credential Manager) can replace the key field without touching the
+  panel, the factory or any adapter. Until then, the guarantees that *are* met
+  are the ones the tests pin: the key is never logged, never audited, never
+  exported, never rendered in a `repr`/view model and never embedded in an
+  exception or an `ArchitectureReviewResult`.
 - **The retry attempt counter is not a physical dispatch-count metric.** It
   counts retries: after a human unblock at an exhausted attempt budget the same
   attempt is dispatched again. That re-dispatch is operator-controlled and never

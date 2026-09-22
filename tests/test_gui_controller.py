@@ -18,6 +18,7 @@ from architecture_assistant.domain.fsm import STEP_TRANSITIONS
 from architecture_assistant_gui.controller import (
     ABORT_STATES,
     APPROVAL_STATES,
+    DISPLAY_INTENTS,
     INTENTS,
     RESOLVE_STATES,
     UNBLOCK_STATES,
@@ -958,7 +959,9 @@ class TestEnableMatrix:
         assert controller.is_busy is True
 
         for intent in INTENTS:
-            expected = intent.key == "view_snapshot"
+            # Every display action stays usable while work runs: the operator
+            # must always be able to read the log or open a detail window.
+            expected = intent.key in DISPLAY_INTENTS
             assert controller.enabled(intent) is expected, intent.key
 
         controller.apply_result(
@@ -995,6 +998,8 @@ class TestEnableMatrix:
         ):
             assert controller.enabled(controller.intent(key)) is False, key
         for key in ("refresh", "reconnect", "view_snapshot"):
+            assert controller.enabled(controller.intent(key)) is True, key
+        for key in sorted(DISPLAY_INTENTS):
             assert controller.enabled(controller.intent(key)) is True, key
         assert controller.view_model()["banner"]["critical"] is True
         assert "CRITICAL" in controller.view_model()["banner"]["text"]
@@ -2241,6 +2246,22 @@ def _rows(pane: dict[str, Any]) -> dict[str, str]:
     return {label: value for label, value in pane["rows"]}
 
 
+def _popup_rows(spec: dict[str, Any], title: str) -> list[tuple[str, str]]:
+    """One popup section's rows, addressed by the section's own title."""
+    for section in spec["sections"]:
+        if section["title"] == title:
+            return [(str(row[0]), str(row[1])) for row in section["rows"]]
+    raise AssertionError(f"the popup has no {title!r} section")
+
+
+def _popup_lines(spec: dict[str, Any], title: str) -> list[str]:
+    """One popup text section's lines, addressed by the section's own title."""
+    for section in spec["sections"]:
+        if section["title"] == title:
+            return [str(line) for line in section["lines"]]
+    raise AssertionError(f"the popup has no {title!r} section")
+
+
 class TestSupervisorPanel:
     """The Supervisor tab: plain data in, one core call out, nothing else."""
 
@@ -2285,7 +2306,7 @@ class TestSupervisorPanel:
         assert "WAITING_HUMAN" in encoded
         assert "a" * 64 not in encoded  # identities are shortened for display
 
-    def test_the_three_panes_are_the_assistant_the_worker_and_the_supervisor(
+    def test_the_three_panes_show_the_compact_summary_each_role_owns(
         self,
     ) -> None:
         _runner, controller, _core = supervisor_controller()
@@ -2296,52 +2317,75 @@ class TestSupervisorPanel:
         assert view["cline_pane"]["title"] == "Cline"
         assert view["supervisor_pane"]["title"] == "Supervisor"
 
+        # The panes are summaries now: the technical fact sheet - task text,
+        # constraints, ADRs, files, tests, hashes and evidence - moved into the
+        # popup, where `test_the_technical_popup_keeps_the_full_fact_sheet`
+        # asserts it is still there.
         assistant = _rows(view["assistant_pane"])
-        assert assistant["Task goal"] == "GUI step"
-        assert assistant["Task"] == "do the thing"
         assert assistant["Attempts remaining"] == "2"
-        assert assistant["Constraints"] == "keep it Python-only"
-        assert assistant["Accepted ADRs"] == "ADR-001: sqlite only"
-        assert assistant["Open risks"] == "risk-001: pilot risk"
-        assert assistant["Deterministic findings"] == "finding-1: no violation"
-        assert assistant["Open change requests"] == "ACR-001: add monitor"
+        assert assistant["Mode"] == "MANUAL"
+        assert set(assistant) == {
+            "Step state",
+            "Attempts remaining",
+            "Mode",
+            "Project paused",
+            "Architecture baseline",
+        }
 
         cline = _rows(view["cline_pane"])
         assert cline["Report status"] == "DONE"
         assert cline["Report summary"] == "the step is done"
-        assert cline["Files created"] == "src/new.py"
-        assert cline["Tests"] == "failed=0 | passed=3"
-        assert cline["Issues"] == "a note"
-        assert cline["Report hash"] == "b" * 64
+        assert set(cline) == {"Worker state", "Report status", "Report summary"}
 
         supervisor = _rows(view["supervisor_pane"])
-        assert supervisor["Provider"] == "scripted"
+        assert supervisor["Analysis status"] == "WAITING_HUMAN"
         assert supervisor["Action"] == "CLARIFY"
         assert supervisor["Risk"] == "LOW"
-        assert supervisor["Reason"] == "the report is missing its test command"
-        assert supervisor["Evidence"] == "application/context.py:12"
+        assert supervisor["Requires human"] == "yes"
         assert (
-            supervisor["Proposed instruction"]
+            supervisor["Instruction (short)"]
             == "Add the pytest command to the report."
         )
-        assert supervisor["Requires human"] == "yes"
+        assert set(supervisor) == {
+            "Analysis status",
+            "Action",
+            "Risk",
+            "Requires human",
+            "Instruction (short)",
+        }
 
-    def test_the_header_shows_the_identity_the_state_and_the_polling_status(
+    def test_the_header_shows_the_identity_the_state_and_the_waiting_for(
         self,
     ) -> None:
+        """The header keeps the summary; the identifiers are in the popup."""
         _runner, controller, _core = supervisor_controller()
 
         header = dict(controller.view_model()["supervisor"]["header"])
 
-        assert header["Project"] == "Project"
-        assert header["Step"] == "9"
-        assert header["Attempt"] == "1"
-        assert header["Worker state"] == "REPORT_RECEIVED"
-        assert header["Supervisor state"] == "WAITING_HUMAN"
-        assert header["Current report hash"] == "b" * 16
-        assert header["Supervision id"] == "a" * 16
-        assert header["Polling status"] == "running"
-        assert header["Waiting For"] == "human-decision"
+        assert header == {
+            "Project": "Project",
+            "Step": "9",
+            "Attempt": "1",
+            "Worker state": "REPORT_RECEIVED",
+            "Supervisor state": "WAITING_HUMAN",
+            "Waiting For": "human-decision",
+        }
+
+    def test_the_technical_popup_keeps_the_identity_and_the_polling_status(
+        self,
+    ) -> None:
+        _runner, controller, _core = supervisor_controller()
+
+        popup = controller.supervisor_popup()
+        identity = dict(_popup_rows(popup, "Supervision identity"))
+        report = dict(_popup_rows(popup, "Report and attempt"))
+        runtime = dict(_popup_rows(popup, "Runtime and polling"))
+
+        assert identity["Supervision id"] == "a" * 64
+        assert identity["Status"] == "WAITING_HUMAN"
+        assert identity["Decided by"] == "-"
+        assert report["Report hash (current)"] == "b" * 64
+        assert runtime["Polling status"] == "running"
 
     def test_the_polling_status_is_honest_when_nothing_reports(self) -> None:
         for runtime, expected in (
@@ -2355,15 +2399,24 @@ class TestSupervisorPanel:
 
             header = dict(controller.view_model()["supervisor"]["header"])
 
-            assert header["Polling status"] == expected, runtime
+            assert "Polling status" not in header
+            runtime_rows = dict(
+                _popup_rows(controller.supervisor_popup(), "Runtime and polling")
+            )
+
+            assert runtime_rows["Polling status"] == expected, runtime
 
     def test_the_gate_verdict_and_the_malformed_deadlines_are_shown(self) -> None:
         _runner, controller, _core = supervisor_controller()
 
-        row = _rows(controller.view_model()["supervisor"]["supervisor_pane"])
+        rows = dict(
+            _popup_rows(
+                controller.supervisor_popup(), "Gate verdict and deadlines"
+            )
+        )
 
-        assert row["Gate"] == "BLOCK | supervision-waiting_human"
-        assert row["Malformed deadlines"] == "stability 30.0s | absolute 120.0s"
+        assert rows["Gate"] == "BLOCK | supervision-waiting_human"
+        assert rows["Malformed deadlines"] == "stability 30.0s | absolute 120.0s"
 
         _runner, allowed, _core = supervisor_controller(
             status=make_supervisor_status(
@@ -2371,8 +2424,10 @@ class TestSupervisorPanel:
             )
         )
 
-        allowed_row = _rows(allowed.view_model()["supervisor"]["supervisor_pane"])
-        assert allowed_row["Gate"] == "ALLOW | supervision-no_action"
+        allowed_rows = dict(
+            _popup_rows(allowed.supervisor_popup(), "Gate verdict and deadlines")
+        )
+        assert allowed_rows["Gate"] == "ALLOW | supervision-no_action"
 
     def test_the_history_lists_every_identity_of_the_attempt_newest_first(
         self,

@@ -35,6 +35,9 @@ from ..domain.models import Finding
 from ..infrastructure import (
     ClaudeAdvisorAbstainError,
     ClaudeAdvisorError,
+    DeepSeekAdvisorAbstainError,
+    DeepSeekAdvisorError,
+    DisabledAdvisorAbstainError,
     GrokAdvisorAbstainError,
     GrokAdvisorError,
     OpenAIAdvisorAbstainError,
@@ -50,10 +53,17 @@ __all__ = [
 ]
 
 #: A deliberate refusal. Most specific first: these subclass the errors below.
+#:
+#: ``DisabledAdvisorAbstainError`` belongs here for the same reason the provider
+#: abstentions do: an advisor the operator switched off **deliberately** answers
+#: nothing, which is an abstention, never a provider failure. It makes no call at
+#: all, so classifying it as an error would blame a provider that was never asked.
 ABSTAIN_ERRORS: tuple[type[BaseException], ...] = (
     OpenAIAdvisorAbstainError,
     ClaudeAdvisorAbstainError,
     GrokAdvisorAbstainError,
+    DeepSeekAdvisorAbstainError,
+    DisabledAdvisorAbstainError,
 )
 
 #: Every other advisor failure (transport, HTTP, contract, missing key, ...).
@@ -61,6 +71,7 @@ ADVISOR_ERRORS: tuple[type[BaseException], ...] = (
     OpenAIAdvisorError,
     ClaudeAdvisorError,
     GrokAdvisorError,
+    DeepSeekAdvisorError,
 )
 
 #: Stable, non-sensitive reason prefixes.

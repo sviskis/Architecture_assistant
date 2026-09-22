@@ -45,6 +45,7 @@ __all__ = [
     "RealizationGate",
     "CanonicalBaseline",
     "AdvisorPort",
+    "ConnectionStatus",
     "JudgePort",
     "CostPort",
     "ReportingPort",
@@ -785,6 +786,27 @@ class RealizationControlPort(Protocol):
     """
 
     def gate(self, step_no: int, attempt: int) -> RealizationGate: ...
+
+
+class ConnectionStatus(StrEnum):
+    """The verdict of one *smallest safe* provider call (the Test Connection button).
+
+    The vocabulary is deliberately tiny and provider-neutral: an operator needs
+    to know whether a saved provider configuration *works*, and - when it does
+    not - which layer refused. A verdict never carries a status code, a header,
+    a response body or a credential: it is a single word.
+
+    ``DISABLED`` exists because "this advisor runs no provider" is a legitimate,
+    intentional configuration; it is what a disabled advisor answers, and it is
+    produced **without any network call at all**.
+    """
+
+    CONNECTED = "CONNECTED"
+    AUTH_ERROR = "AUTH ERROR"
+    PROVIDER_ERROR = "PROVIDER ERROR"
+    NETWORK_ERROR = "NETWORK ERROR"
+    MODEL_ERROR = "MODEL ERROR"
+    DISABLED = "DISABLED"
 
 
 @runtime_checkable

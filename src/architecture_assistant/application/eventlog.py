@@ -114,6 +114,8 @@ _COMPONENTS: dict[str, str] = {
     "openai": "OpenAI",
     "claude": "Claude",
     "grok": "Grok",
+    "deepseek": "DeepSeek",
+    "disabled": "Disabled",
     "gate": "Gate",
     "validator": "Gate",
     "architecture-validator": "Gate",

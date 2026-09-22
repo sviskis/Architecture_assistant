@@ -136,7 +136,6 @@ def window() -> Iterator[tuple[tk.Tk, views.MainWindow]]:
         on_action=lambda _key: None,
         on_actor=lambda _text: None,
         on_question=lambda _text: None,
-        on_clear_logs=lambda: None,
     )
     view.render(_review_view(*ADVISORS))
     _select_tab(root, view, "Architecture Review")
@@ -173,7 +172,6 @@ def restored() -> Iterator[Any]:
             on_action=lambda _key: None,
             on_actor=lambda _text: None,
             on_question=lambda _text: None,
-            on_clear_logs=lambda: None,
             layout=layout,
         )
         view.render(_review_view(*panels))
@@ -306,13 +304,15 @@ class TestReviewTabSplitters:
 
         panes = _panes(root, split)
 
-        # every pane is its own labelled frame with its own facts and its own
-        # text: one advisor can be widened without touching the other two
+        # every pane is its own labelled frame with its own compact summary and
+        # its own controls: one advisor can be widened without touching the others
         assert [str(pane.cget("text")) for pane in panes] == list(ADVISORS)
         for pane, key in zip(panes, view._panes):
             assert isinstance(pane, ttk.LabelFrame)
             assert _inside(key["facts"], pane)
-            assert _inside(key["body"], pane)
+            assert _inside(key["summary"], pane)
+            assert _inside(key["details"], pane)
+            assert _inside(key["provider"], pane)
 
     def test_the_advisor_panes_start_equally_wide(
         self, window: tuple[tk.Tk, views.MainWindow]
@@ -489,7 +489,7 @@ class TestSupervisorTabSplit:
             panes, ("assistant_pane", "cline_pane", "supervisor_pane")
         ):
             assert _inside(view._supervisor_panes[key], pane)
-            assert _inside(view._supervisor_history, pane) is False
+            assert _inside(view._supervisor_details, pane) is False
 
         assert [str(pane.cget("text")) for pane in panes] == [
             "Assistant",
@@ -841,21 +841,26 @@ class TestTheRememberedTab:
 
     def test_every_built_in_tab_can_be_opened_by_name(self, restored) -> None:
         _root, view = restored({})
+        # Only the primary workflow owns a tab; logs, audit, risks and reports
+        # open in their own windows instead (see the utility bar).
         titles = (
             "Monitor",
             "Architecture Review",
             "Architecture Proposal",
             "Supervisor",
-            "Logs",
-            "Audit",
-            "Risks",
-            "Reports / Log",
         )
 
         assert [view.select_tab(title) for title in titles] == [True] * len(
             titles
         )
         assert view._current_tab() == titles[-1]
+
+    def test_the_secondary_views_are_no_longer_tabs(self, restored) -> None:
+        """Logs, Audit, Risks and Reports are popups now - not tabs."""
+        _root, view = restored({})
+
+        for title in ("Logs", "Audit", "Risks", "Reports / Log", "Reports"):
+            assert view.select_tab(title) is False
 
 
 class TestTheLayoutSnapshot:
@@ -1023,7 +1028,7 @@ class TestTheApplicationRemembersTheWindow:
                 path,
                 {
                     "geometry": "1200x820+30+40",
-                    "tab": "Risks",
+                    "tab": "Supervisor",
                     "sashes": {"main": [260]},
                 },
             )
@@ -1034,7 +1039,7 @@ class TestTheApplicationRemembersTheWindow:
             window = panel._window
 
             assert panel._root.winfo_geometry().startswith("1200x820")
-            assert window._current_tab() == "Risks"
+            assert window._current_tab() == "Supervisor"
             assert window._main_split.sashpos(0) == 260
 
             # the operator drags one sash and closes the window
@@ -1047,7 +1052,7 @@ class TestTheApplicationRemembersTheWindow:
 
         assert written["sashes"]["main"] == [310]
         assert written["geometry"].startswith("1200x820")
-        assert written["tab"] == "Risks"
+        assert written["tab"] == "Supervisor"
 
     def test_a_damaged_file_means_the_default_layout_and_is_replaced(
         self, tmp_path, monkeypatch
