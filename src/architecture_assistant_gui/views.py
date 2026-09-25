@@ -14,8 +14,12 @@ layout store and the application - no widget here opens a file.
 from __future__ import annotations
 
 import tkinter as tk
+import customtkinter as ctk
 from tkinter import ttk
 from typing import Any, Callable, Mapping, Optional, Sequence
+
+from .workspace_views import WorkspaceViews
+from .theme import COLORS, FONT, button as dark_button
 
 from .controller import (
     CLEAR_LOGS_INTENT,
@@ -175,7 +179,7 @@ DELIBERATION_PANE_FRACTIONS: tuple[float, float] = (0.27, 0.73)
 #: Where the main splitter starts: the top area is given its natural height, but
 #: never more than this share of the window, so the notebook (the tab content)
 #: always owns most of it and a window resize grows the notebook more.
-MAIN_SPLIT_TOP_START_SHARE = 0.45
+MAIN_SPLIT_TOP_START_SHARE = 0.25
 
 #: The stable name of every splitter whose sash positions are remembered, in the
 #: order they are built. A remembered layout stores one sash list per name, so a
@@ -295,13 +299,13 @@ def _clamp_split(split: Any, minimum: int) -> None:
 #: The colour of one entry or pane per level. Kept in one place so the Logs tab
 #: and the advisor panes can never disagree about what "warning" looks like.
 _LEVEL_COLOURS: dict[str, str] = {
-    "INFO": "#1a1a1a",
-    "WARN": "#a05000",
-    "ERROR": "#b00020",
+    "INFO": COLORS["primary"],
+    "WARN": COLORS["amber"],
+    "ERROR": COLORS["danger"],
 }
 
 
-class MainWindow:
+class MainWindow(WorkspaceViews):
     """Builds the operator panel and renders one view model at a time."""
 
     def __init__(
@@ -410,22 +414,30 @@ class MainWindow:
         root.columnconfigure(0, weight=1)
         root.rowconfigure(0, weight=1)
 
-        # One horizontal splitter right below the project header: everything the
-        # operator *does* (current work and the action buttons) sits in the top
-        # pane, the tab notebook in the bottom one. The notebook owns the larger
-        # weight, so a window resize gives it most of the new vertical space.
+        # Compact project header above the workspace. The notebook and its
+        # contextual command dock share the lower pane and receive extra height.
         self._main_split = ttk.PanedWindow(root, orient="vertical")
         self._main_split.grid(row=0, column=0, sticky="nsew")
 
         top_area = ttk.Frame(self._main_split)
         top_area.columnconfigure(0, weight=1)
-        top_area.rowconfigure(3, weight=1)
+        top_area.rowconfigure(3, weight=0)
         _add_pane(self._main_split, top_area, MAIN_SPLIT_MIN_SIZE, weight=1)
         self._top_area = top_area
 
         self._build_top()
         self._build_operator()
-        self._build_middle()
+        next_bar = ctk.CTkFrame(self._top_area, fg_color=COLORS["card"], corner_radius=6,
+                                border_width=1, border_color=COLORS["border"])
+        next_bar.grid(row=3, column=0, sticky="ew")
+        next_bar.columnconfigure(0, weight=1)
+        ctk.CTkLabel(next_bar, textvariable=self._var("next_step_guidance"),
+                     text_color=COLORS["primary"], wraplength=780, anchor="w").grid(
+                         row=0, column=0, sticky="w", padx=12, pady=8)
+        self._next_action = "nav:Brief"
+        self._next_button = dark_button(next_bar, "Write project brief",
+                                        lambda: self._on_action(self._next_action), primary=True)
+        self._next_button.grid(row=0, column=1, sticky="e", padx=8, pady=7)
         self._build_tabs()
         self._build_status()
 
@@ -467,33 +479,44 @@ class MainWindow:
         )
 
     def _build_top(self) -> None:
-        frame = ttk.Frame(self._top_area, padding=(8, 6, 8, 2))
-        frame.grid(row=0, column=0, sticky="ew")
-        for column in range(5):
-            frame.columnconfigure(column, weight=1)
+        frame = ctk.CTkFrame(self._top_area, fg_color=COLORS["shell"], corner_radius=0)
+        frame.grid(row=0, column=0, sticky="ew", padx=16, pady=(10, 4))
+        frame.columnconfigure(0, weight=3)
+        frame.columnconfigure(1, weight=5)
+        frame.columnconfigure(2, weight=2)
 
-        fields = (
-            ("project", "Project"),
-            ("mode", "Mode"),
-            ("project_state", "Project state"),
-            ("architecture", "Architecture"),
-            ("health", "Health"),
-        )
-        for column, (key, label) in enumerate(fields):
-            ttk.Label(frame, text=f"{label}:").grid(
-                row=0, column=column, sticky="w"
-            )
-            ttk.Label(
-                frame, textvariable=self._var(key), font=("", 9, "bold")
-            ).grid(row=1, column=column, sticky="w")
+        identity = ctk.CTkFrame(frame, fg_color=COLORS["shell"], corner_radius=0)
+        identity.grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(identity, text="ARCHITECTURE ASSISTANT", text_color=COLORS["muted"],
+                     font=(FONT, 9, "bold")).pack(anchor="w")
+        ctk.CTkLabel(identity, textvariable=self._var("project"), text_color=COLORS["primary"],
+                     font=(FONT, 16, "bold")).pack(anchor="w")
+
+        chips = ctk.CTkFrame(frame, fg_color=COLORS["shell"], corner_radius=0)
+        chips.grid(row=0, column=1)
+        for key in ("mode", "project_state", "architecture", "health"):
+            ctk.CTkLabel(chips, textvariable=self._var(key), text_color=COLORS["secondary"],
+                         fg_color=COLORS["card"], corner_radius=12,
+                         font=(FONT, 10), padx=11, pady=3).pack(side="left", padx=4)
+
+        operator = ctk.CTkFrame(frame, fg_color=COLORS["shell"], corner_radius=0)
+        operator.grid(row=0, column=2, sticky="e")
+        ctk.CTkLabel(operator, text="OPERATOR", text_color=COLORS["muted"],
+                     font=(FONT, 9, "bold")).pack(anchor="e")
+        self._actor = ctk.CTkEntry(operator, width=190, height=29,
+                                   fg_color=COLORS["field"], border_color=COLORS["border"],
+                                   text_color=COLORS["primary"])
+        self._actor.pack(anchor="e")
+        self._actor.bind("<FocusOut>", lambda _event: self._on_actor(self._actor.get()))
 
         self._build_utility(frame)
 
-        self._banner = ttk.Label(
+        self._banner = ctk.CTkLabel(
             self._top_area,
             textvariable=self._var("banner"),
-            padding=(10, 3),
             anchor="w",
+            fg_color=COLORS["shell"],
+            text_color=COLORS["green"],
         )
         self._banner.grid(row=1, column=0, sticky="ew")
 
@@ -505,36 +528,21 @@ class MainWindow:
         ordinary intents: the *application* opens the window, and this module
         still only ever calls ``self._on_action``.
         """
-        bar = ttk.Frame(parent, padding=(0, 4, 0, 0))
-        bar.grid(row=2, column=0, columnspan=5, sticky="ew")
+        bar = ctk.CTkFrame(parent, fg_color=COLORS["shell"], corner_radius=0)
+        bar.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(8, 0))
         for index, (key, label) in enumerate(UTILITY_BUTTONS):
-            button = ttk.Button(
-                bar, text=label, command=lambda k=key: self._on_action(k)
-            )
+            button = dark_button(bar, label, lambda k=key: self._on_action(k), width=86)
             button.grid(row=0, column=index, sticky="w", padx=(0, 4))
             self.buttons.setdefault(key, button)
 
     def _build_operator(self) -> None:
-        frame = ttk.Frame(self._top_area, padding=(8, 2, 8, 4))
-        frame.grid(row=2, column=0, sticky="ew")
-        ttk.Label(frame, text="Operator:").grid(row=0, column=0, sticky="w")
-        self._actor = ttk.Entry(frame, width=28)
-        self._actor.grid(row=0, column=1, sticky="w", padx=(4, 8))
-        self._actor.bind(
-            "<FocusOut>", lambda _event: self._on_actor(self._actor.get())
-        )
-        ttk.Label(
-            frame,
-            text=(
-                "Required for every human action; a reason is asked per action."
-            ),
-        ).grid(row=0, column=2, sticky="w")
+        # The operator belongs to the top bar; this row is intentionally absent.
+        return
 
-    def _build_middle(self) -> None:
-        frame = ttk.Frame(self._top_area, padding=(8, 4))
-        frame.grid(row=3, column=0, sticky="nsew")
+    def _build_middle(self, parent: Any) -> None:
+        frame = ttk.Frame(parent, padding=(0, 0, 0, 8))
+        frame.pack(fill="x", before=self._monitor)
         frame.columnconfigure(0, weight=1)
-        frame.columnconfigure(1, weight=1)
         frame.rowconfigure(0, weight=1)
 
         work = ttk.LabelFrame(frame, text="Current work", padding=(8, 6))
@@ -552,62 +560,101 @@ class MainWindow:
             ("work_channel", "Worker channel"),
             ("work_blocking", "Blocking steps"),
         )
-        for row, (key, label) in enumerate(work_rows):
+        work.columnconfigure(3, weight=1)
+        for index, (key, label) in enumerate(work_rows):
+            row, column = index % 5, (index // 5) * 2
             ttk.Label(work, text=f"{label}:").grid(
-                row=row, column=0, sticky="w"
+                row=row, column=column, sticky="w", padx=(0, 8)
             )
             ttk.Label(
-                work, textvariable=self._var(key), anchor="w"
-            ).grid(row=row, column=1, sticky="ew")
+                work, textvariable=self._var(key), anchor="w", wraplength=300
+            ).grid(row=row, column=column + 1, sticky="ew", padx=(0, 16))
         ttk.Label(
             work,
             textvariable=self._var("work_note"),
-            foreground="#a05000",
+            foreground=COLORS["amber"],
             wraplength=380,
             justify="left",
         ).grid(
-            row=len(work_rows),
+            row=5,
             column=0,
-            columnspan=2,
+            columnspan=4,
             sticky="ew",
             pady=(6, 0),
         )
 
-        actions = ttk.LabelFrame(frame, text="Actions", padding=(8, 6))
-        actions.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
-        for index, group in enumerate(GROUPS):
-            group_frame = ttk.LabelFrame(actions, text=group, padding=(6, 4))
-            group_frame.grid(
-                row=index // 2,
-                column=index % 2,
-                sticky="nsew",
-                padx=2,
-                pady=2,
-            )
+    def _build_action_dock(self, parent: Any) -> None:
+        """A scrollable right-hand command panel; callbacks remain unchanged."""
+        dock = ctk.CTkFrame(parent, width=270, fg_color=COLORS["sidebar"],
+                            corner_radius=0, border_width=1, border_color=COLORS["border"])
+        dock.grid(row=0, column=2, sticky="nsew", padx=(8, 0))
+        dock.grid_propagate(False)
+        dock.rowconfigure(1, weight=1)
+        dock.columnconfigure(0, weight=1)
+        ctk.CTkLabel(dock, text="ACTIONS", text_color=COLORS["secondary"],
+                     font=(FONT, 11, "bold"), anchor="w").grid(row=0, column=0, sticky="ew", padx=14, pady=(14, 8))
+        actions = ctk.CTkScrollableFrame(dock, fg_color=COLORS["sidebar"],
+                                         corner_radius=0, scrollbar_button_color=COLORS["border"],
+                                         scrollbar_button_hover_color=COLORS["muted"])
+        actions.grid(row=1, column=0, sticky="nsew")
+        actions.columnconfigure(0, weight=1)
+        self._action_groups = {}
+        order = ("Review", "Proposal", "Supervisor", "Approval", "Step control",
+                 "Plan", "Loop", "Project", "Reports", "Monitoring")
+        for index, group in enumerate(order):
+            group_frame = ctk.CTkFrame(actions, fg_color=COLORS["card"], corner_radius=6,
+                                       border_width=1, border_color=COLORS["border"])
+            group_frame.grid(row=index, column=0, sticky="ew", pady=(0, 9))
             group_frame.columnconfigure(0, weight=1)
-            row = 0
-            for intent in INTENTS:
-                if intent.group != group:
-                    continue
-                button = ttk.Button(
-                    group_frame,
-                    text=intent.label,
-                    command=lambda key=intent.key: self._on_action(key),
-                )
-                button.grid(row=row, column=0, sticky="ew", pady=1)
+            self._action_groups[group] = group_frame
+            ctk.CTkLabel(group_frame, text=group.upper(), text_color=COLORS["muted"],
+                         font=(FONT, 9, "bold"), anchor="w").grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 3))
+            for row, intent in enumerate((i for i in INTENTS if i.group == group), 1):
+                primary = intent.key in {"run_review", "run_until_idle", "prepare_execution_plan"}
+                button = dark_button(group_frame, intent.label,
+                                     lambda key=intent.key: self._on_action(key), primary=primary)
+                button.grid(row=row, column=0, sticky="ew", padx=8, pady=(2, 6))
                 self.buttons[intent.key] = button
-                row += 1
+        self._notebook.bind("<<NotebookTabChanged>>", self._sync_action_dock, add="+")
+        self._sync_action_dock()
+
+    def _sync_action_dock(self, _event: Any = None) -> None:
+        contextual = {
+            "Architecture Review": {"Review"},
+            "Architecture Proposal": {"Proposal"},
+            "Supervisor": {"Supervisor"},
+            "Monitor": {"Approval", "Step control"},
+        }
+        visible = contextual.get(self._current_tab(), set()) | {
+            "Plan", "Loop", "Project", "Reports", "Monitoring"
+        }
+        for title, button in self._nav_buttons.items():
+            active = title == self._current_tab()
+            button.configure(text_color=COLORS["accent"] if active else COLORS["secondary"],
+                             border_color=COLORS["accent"] if active else COLORS["sidebar"],
+                             border_width=1 if active else 0,
+                             fg_color=COLORS["card"] if active else COLORS["sidebar"])
+        for group, frame in self._action_groups.items():
+            if group in visible:
+                frame.grid()
+            else:
+                frame.grid_remove()
 
     def _build_tabs(self) -> None:
         """The tab notebook: the bottom pane of the main splitter."""
         pane = ttk.Frame(self._main_split, padding=(8, 2, 8, 4))
-        pane.columnconfigure(0, weight=1)
+        pane.columnconfigure(1, weight=1)
         pane.rowconfigure(0, weight=1)
         _add_pane(self._main_split, pane, MAIN_SPLIT_MIN_SIZE, weight=3)
 
-        notebook = ttk.Notebook(pane)
-        notebook.grid(row=0, column=0, sticky="nsew")
+        self._build_navigation(pane)
+        notebook = ttk.Notebook(pane, style="Workspace.TNotebook")
+        notebook.grid(row=0, column=1, sticky="nsew")
         self._notebook = notebook
+        self._build_brief_tab(notebook)
+        self._build_agents_tab(notebook)
+        self._build_plan_tab(notebook)
+        self._build_cline_tab(notebook)
 
         monitor = ttk.Frame(notebook, padding=6)
         self._monitor = ttk.Treeview(
@@ -618,12 +665,14 @@ class MainWindow:
         self._monitor.column("field", width=200, anchor="w")
         self._monitor.column("value", width=560, anchor="w")
         self._monitor.pack(fill="both", expand=True)
+        self._build_middle(monitor)
         notebook.add(monitor, text="Monitor")
 
         self._build_review_tab(notebook)
         self._build_deliberation_tab(notebook)
         self._build_proposal_tab(notebook)
         self._build_supervisor_tab(notebook)
+        self._build_action_dock(pane)
         # Logs, Audit, Risks and Reports are **popups** now: they are things the
         # operator consults rather than works in, so they open from the utility
         # bar (and from the section they belong to) instead of each owning a tab.
@@ -839,7 +888,7 @@ class MainWindow:
         self._build_review_summary(lower)
 
         ttk.Label(
-            frame, textvariable=self._var("review_progress"), foreground="#a05000"
+            frame, textvariable=self._var("review_progress"), foreground=COLORS["amber"]
         ).grid(row=1, column=0, sticky="w", pady=(4, 0))
         ttk.Label(
             frame, textvariable=self._var("review_status"), wraplength=900,
@@ -966,6 +1015,7 @@ class MainWindow:
             _add_pane(panes, pane, DELIBERATION_PANE_MIN_SIZE, weight=1)
             self._deliberation_panes[slot] = {"frame": pane, "rows": table}
 
+        ttk.Button(frame, text="Edit brief / prompt", command=lambda: self.select_tab("Brief")).grid(row=4, column=0, sticky="w", pady=4)
         # The controls live under the centre pane, so they are always beside the
         # review they act on.
         controls = ttk.Frame(self._deliberation_panes["lead"]["frame"])
@@ -983,11 +1033,13 @@ class MainWindow:
         ):
             button = ttk.Button(
                 controls,
-                text=key.replace("deliberation_", "").replace("_", " ").title(),
+                text=next(intent.label for intent in INTENTS if intent.key == key),
                 command=lambda name=key: self._on_action(name),
             )
-            button.grid(row=0, column=index % 3, sticky="ew", padx=(0, 4), pady=2)
+            button.grid(row=index // 2, column=index % 2, sticky="ew", padx=(0, 4), pady=2)
+            controls.columnconfigure(index % 2, weight=1)
             self._deliberation_buttons[key] = button
+            self.buttons[key] = button
 
         ttk.Label(
             frame,
@@ -1027,7 +1079,7 @@ class MainWindow:
             allowed = enabled.get(key, False)
             button.state(["!disabled"] if allowed else ["disabled"])
 
-    def _build_proposal_tab(self, notebook: Any) -> None:
+    def _build_proposal_details(self, notebook: Any) -> None:
         """The Architecture Proposal tab: the *managed project's* design.
 
         This tab is the visible half of one boundary. It shows a managed
@@ -1198,7 +1250,7 @@ class MainWindow:
             frame,
             textvariable=self._var("proposal_note"),
             wraplength=900,
-            foreground="#a05000",
+            foreground=COLORS["amber"],
             justify="left",
         ).grid(row=3, column=0, sticky="ew", pady=(0, 4))
 
@@ -1282,16 +1334,27 @@ class MainWindow:
         "keep whatever is stored", so a secret never has to be retyped to save
         the rest of the form and never has to be shown again.
         """
-        pane = ttk.LabelFrame(self._panes_frame, text="Advisor", padding=(6, 4))
+        pane = ctk.CTkFrame(self._panes_frame, fg_color=COLORS["card"], corner_radius=7,
+                            border_width=1, border_color=COLORS["border"])
         _add_pane(self._panes_frame, pane, ADVISOR_SPLIT_MIN_SIZE, weight=1)
         pane.columnconfigure(0, weight=1)
-        pane.rowconfigure(2, weight=2)
-        pane.rowconfigure(3, weight=3)
+        pane.rowconfigure(3, weight=2)
+        pane.rowconfigure(4, weight=3)
 
-        settings = ttk.LabelFrame(
-            pane, text="Provider settings", padding=(4, 2)
-        )
-        settings.grid(row=0, column=0, sticky="ew")
+        heading = ctk.CTkFrame(pane, fg_color=COLORS["card"], corner_radius=0)
+        heading.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 3))
+        dot_colors = (COLORS["green"], COLORS["amber"], COLORS["purple"])
+        dot = ctk.CTkFrame(heading, width=8, height=8, corner_radius=10,
+                           fg_color=dot_colors[index % len(dot_colors)])
+        dot.pack(side="left", padx=(0, 7))
+        dot.pack_propagate(False)
+        title = ctk.CTkLabel(heading, text="Advisor", text_color=COLORS["primary"],
+                             font=(FONT, 13, "bold"))
+        title.pack(side="left")
+
+        settings = ctk.CTkFrame(pane, fg_color=COLORS["field"], corner_radius=5,
+                                 border_width=1, border_color=COLORS["border"])
+        settings.grid(row=1, column=0, sticky="ew", padx=8, pady=4)
         settings.columnconfigure(1, weight=1)
 
         ttk.Label(settings, text="Provider:").grid(row=0, column=0, sticky="w")
@@ -1324,62 +1387,59 @@ class MainWindow:
         )
         show.grid(row=2, column=2, sticky="w", pady=(2, 0))
 
-        buttons = ttk.Frame(settings)
+        buttons = ctk.CTkFrame(settings, fg_color=COLORS["field"], corner_radius=0)
         buttons.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(3, 0))
-        test = ttk.Button(
-            buttons,
-            text="Test Connection",
-            command=lambda i=index: self._on_test_connection(i),
-        )
-        test.grid(row=0, column=0, sticky="w")
-        save = ttk.Button(
-            buttons,
-            text="Save",
-            command=lambda: self._on_action(SAVE_SETTINGS_INTENT),
-        )
-        save.grid(row=0, column=1, sticky="w", padx=(6, 0))
+        test = dark_button(buttons, "Test Connection", lambda i=index: self._on_test_connection(i))
+        test.grid(row=0, column=0, columnspan=2, sticky="ew")
+        save = dark_button(buttons, "Save", lambda: self._on_action(SAVE_SETTINGS_INTENT))
+        save.grid(row=1, column=0, sticky="ew", pady=(4, 0))
         # The full result - finding id, confidence, anchor, step, evidence refs,
         # tokens, cost, the sanitized error and the whole finding text - opens in
         # the advisor's own window. The main pane keeps the summary.
         details_key = (
             POPUP_ADVISOR_KEYS[index] if index < len(POPUP_ADVISOR_KEYS) else ""
         )
-        details = ttk.Button(buttons, text="Details...")
+        details = dark_button(buttons, "Details...", lambda: None)
         if details_key:
             details.configure(
                 command=lambda k=details_key: self._on_action(k)
             )
         else:
             details.state(["disabled"])
-        details.grid(row=0, column=2, sticky="w", padx=(6, 0))
+        details.grid(row=1, column=1, sticky="ew", padx=(6, 0), pady=(4, 0))
+        buttons.columnconfigure((0, 1), weight=1)
         ttk.Label(settings, textvariable=self._var(f"pane_settings_{index}")).grid(
             row=4, column=0, columnspan=3, sticky="w", pady=(2, 0)
         )
 
         status_key = f"pane_status_{index}"
-        status = ttk.Label(
+        status = ctk.CTkLabel(
             pane,
             textvariable=self._var(status_key),
-            font=("", 9, "bold"),
+            font=(FONT, 11, "bold"),
+            text_color=COLORS["secondary"],
         )
-        status.grid(row=1, column=0, sticky="w", pady=(4, 0))
+        status.grid(row=2, column=0, sticky="w", padx=10, pady=(4, 0))
         facts = self._table_in(
             pane,
             tuple(key for key, _h, _w in COMPACT_FACT_COLUMNS),
             columns=COMPACT_FACT_COLUMNS,
             height=4,
-            row=2,
+            row=3,
         )
         summary_key = f"pane_summary_{index}"
-        summary = ttk.Label(
+        summary = ctk.CTkLabel(
             pane,
             textvariable=self._var(summary_key),
             wraplength=300,
             justify="left",
+            text_color=COLORS["secondary"],
         )
-        summary.grid(row=3, column=0, sticky="new", pady=(4, 0))
+        summary.grid(row=4, column=0, sticky="new", padx=10, pady=(4, 8))
         return {
             "frame": pane,
+            "title": title,
+            "dot": dot,
             "status": status,
             "status_key": status_key,
             "summary": summary,
@@ -1397,17 +1457,15 @@ class MainWindow:
 
     def _fill_pane(self, pane: dict[str, Any], panel: Mapping[str, Any]) -> None:
         """Fill one advisor pane from its model - text, colour and summary only."""
-        pane["frame"].configure(text=str(panel.get("name") or "Advisor"))
+        pane["title"].configure(text=str(panel.get("name") or "Advisor"))
         # the label owns a textvariable, so the text must be set through it -
         # setting ``text=`` next to a ``textvariable`` is silently ignored by Tk
         self._var(str(pane["status_key"])).set(
             str(panel.get("status_text") or "-")
         )
-        pane["status"].configure(
-            foreground=_LEVEL_COLOURS.get(
-                str(panel.get("level") or "INFO"), _LEVEL_COLOURS["INFO"]
-            )
-        )
+        level = str(panel.get("level") or "INFO")
+        pane["status"].configure(text_color={"INFO": COLORS["green"], "WARN": COLORS["amber"],
+                                              "ERROR": COLORS["danger"]}.get(level, COLORS["secondary"]))
         self._fill(
             pane["facts"],
             self._compact_rows(pane, panel),
@@ -1507,6 +1565,10 @@ class MainWindow:
                 "model": str(pane["model"].get() or ""),
                 "api_key": typed if typed else None,
             }
+        for slot, fields in self._agent_fields.items():
+            typed = fields["key"].get()
+            values[slot] = {"provider": fields["provider"].get() or None,
+                            "model": fields["model"].get(), "api_key": typed if typed else None}
         return values
 
     def clear_key_entries(self) -> None:
@@ -1515,6 +1577,8 @@ class MainWindow:
         A saved key lives in the settings file and nowhere else; leaving it typed
         in a widget would be the one place it could linger on screen.
         """
+        for fields in self._agent_fields.values():
+            fields["key"].delete(0, "end")
         for pane in self._panes:
             pane["key"].delete(0, "end")
             pane["reveal"].set(False)
@@ -1610,6 +1674,7 @@ class MainWindow:
     def _build_status(self) -> None:
         bar = ttk.Frame(self._root, padding=(8, 4))
         bar.grid(row=1, column=0, sticky="ew")
+        ttk.Label(bar, textvariable=self._var("action_hint"), foreground=COLORS["secondary"]).grid(row=1, column=0, columnspan=2, sticky="w")
         bar.columnconfigure(0, weight=1)
         ttk.Label(bar, textvariable=self._var("status"), anchor="w").grid(
             row=0, column=0, sticky="ew"
@@ -1672,6 +1737,12 @@ class MainWindow:
             if value <= 0:
                 return ()
             clean.append(int(value))
+        # Legacy layouts reserved most of the height for the old action grid.
+        # Reclaim that empty space now that commands live beside the notebook.
+        if key == "main" and clean and clean[0] > max(
+            self._top_area.winfo_reqheight() * 2, split.winfo_height() * 0.4
+        ):
+            return ()
         return tuple(clean)
 
     def layout_snapshot(self) -> dict[str, Any]:
@@ -1919,6 +1990,7 @@ class MainWindow:
 
     def render(self, view: Mapping[str, Any]) -> None:
         """Apply one view model - the only way this window changes."""
+        self._render_workspace(view)
         top = view.get("top") or {}
         for key in ("project", "mode", "project_state", "architecture", "health"):
             self._var(key).set(str(top.get(key, "-")))
@@ -1926,7 +1998,7 @@ class MainWindow:
         banner = view.get("banner") or {}
         critical = bool(banner.get("critical"))
         self._var("banner").set(str(banner.get("text", "")))
-        self._banner.configure(foreground="#b00020" if critical else "#205020")
+        self._banner.configure(text_color=COLORS["danger"] if critical else COLORS["green"])
 
         work = view.get("work") or {}
         for key in (
@@ -1943,8 +2015,7 @@ class MainWindow:
         self._var("work_stopped").set(str(work.get("stopped_because", "-")))
         self._var("work_channel").set(str(work.get("channel", "-")))
         self._var("work_note").set(
-            "No steps loaded. Seed a plan through the storage port; the GUI "
-            "never generates an architecture plan."
+            "No execution plan yet. Approve an architecture, then create and import its execution plan."
             if work.get("no_steps")
             else ""
         )
@@ -2007,7 +2078,7 @@ class MainWindow:
 
         supervisor = view.get("supervisor") or {}
         self._render_deliberation(view.get("deliberation") or {})
-        self._var("supervisor_status").set(str(supervisor.get("status", "")))
+        self._var("supervisor_status").set("Offline scripted supervisor — not a live AI supervisor. " + str(supervisor.get("status", "")))
         self._fill(
             self._supervisor_header,
             tuple(supervisor.get("header") or ()),
@@ -2034,11 +2105,7 @@ class MainWindow:
         self._var("proposal_note").set(
             ""
             if proposal.get("review_available")
-            else (
-                "No architecture review is available in this session: run the "
-                "review first. A proposal is built from one review and is never "
-                "invented."
-            )
+            else "Use Discussion for a new design, or Quick review to consult the advisors."
         )
         self._fill(
             self._proposal_header,

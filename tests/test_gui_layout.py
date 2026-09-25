@@ -215,12 +215,25 @@ class TestMainWindowSplit:
         assert len(split.panes()) == 2
         top, bottom = _panes(root, split)
 
-        # the top pane is the header, the current work and the actions
+        # the top pane is the compact project header
         assert _inside(view._banner, top)
-        assert _inside(view.buttons["refresh"], top)
+        assert _inside(view.buttons["refresh"], bottom)
         # the bottom pane is the tab notebook
         assert _inside(view._notebook, bottom)
         assert _inside(view._monitor, bottom)
+
+    def test_command_dock_follows_the_selected_workspace(self, window):
+        root, view = window
+        for tab, group in (("Architecture Review", "Review"),
+                           ("Architecture Proposal", "Proposal"),
+                           ("Supervisor", "Supervisor"),
+                           ("Monitor", "Approval")):
+            _select_tab(root, view, tab)
+            assert view._action_groups[group].winfo_ismapped()
+            assert view._action_groups["Plan"].winfo_ismapped()
+            for other in {"Review", "Proposal", "Supervisor", "Approval"} - {group}:
+                assert not view._action_groups[other].winfo_ismapped()
+        assert view.buttons["refresh"].winfo_rootx() > view._notebook.winfo_rootx() + view._notebook.winfo_width()
 
     def test_the_notebook_starts_with_more_height_than_the_top_area(
         self, window: tuple[tk.Tk, views.MainWindow]
@@ -602,11 +615,11 @@ class TestTheRememberedSashes:
         self, restored
     ) -> None:
         """The advisor panes only have a size once their tab is shown."""
-        root, view = restored({"sashes": {"review_advisors": [400, 900]}})
+        root, view = restored({"sashes": {"review_advisors": [350, 700]}})
 
         _select_tab(root, view, "Architecture Review")
 
-        assert [view._panes_frame.sashpos(i) for i in (0, 1)] == [400, 900]
+        assert [view._panes_frame.sashpos(i) for i in (0, 1)] == [350, 700]
 
     def test_a_remembered_supervisor_sash_is_placed_when_its_tab_is_opened(
         self, restored

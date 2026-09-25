@@ -80,6 +80,7 @@ from .advisor_factory import (
     provider_catalog,
 )
 from .provider_settings import (
+    SETTINGS_KEYS,
     ADVISOR_KEYS,
     DEFAULT_PROVIDER_BY_ADVISOR,
     DEFAULT_PROVIDER_SETTINGS_PATH,
@@ -101,6 +102,7 @@ from .provider_settings import (
 )
 
 __all__ = [
+    "SETTINGS_KEYS",
     "Composition",
     "CompositionConfig",
     "compose",

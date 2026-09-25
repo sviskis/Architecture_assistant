@@ -18,6 +18,8 @@ every action again and fails closed, so a stale UI can never force a state.
 
 from __future__ import annotations
 
+from .workspace import proposal_document, SEATS
+
 import json
 from collections import deque
 from dataclasses import dataclass
@@ -176,6 +178,9 @@ CONNECTION_SLOT_BY_INTENT: dict[str, str] = {
     "test_connection_1": "advisor_1",
     "test_connection_2": "advisor_2",
     "test_connection_3": "advisor_3",
+    "test_agent_a": "agent_a",
+    "test_agent_b": "agent_b",
+    "test_lead": "lead",
 }
 
 #: The one action that persists the whole provider configuration.
@@ -402,6 +407,10 @@ class Intent:
 
 #: Every action the GUI offers - the single table the buttons are built from.
 INTENTS: tuple[Intent, ...] = (
+    Intent(key="prepare_execution_plan", label="Create Execution Plan", group="Plan", mutating=False),
+    Intent(key="test_agent_a", label="Test Architect A", group=PROVIDER_INTENT_GROUP, mutating=False),
+    Intent(key="test_agent_b", label="Test Architect B", group=PROVIDER_INTENT_GROUP, mutating=False),
+    Intent(key="test_lead", label="Test Lead", group=PROVIDER_INTENT_GROUP, mutating=False),
     Intent(
         key="load_plan",
         label="Load Plan",
@@ -431,6 +440,8 @@ INTENTS: tuple[Intent, ...] = (
     # which key was pressed.
     Intent(
         key="deliberation_round1",
+        human=True,
+        reason_prompt="Why are you advancing this architecture discussion?",
         label="Run Round 1",
         group=DELIBERATION_INTENT_GROUP,
         mutating=False,
@@ -442,18 +453,24 @@ INTENTS: tuple[Intent, ...] = (
     ),
     Intent(
         key="deliberation_lead_review",
+        human=True,
+        reason_prompt="Why are you advancing this architecture discussion?",
         label="Generate Lead Review",
         group=DELIBERATION_INTENT_GROUP,
         mutating=False,
     ),
     Intent(
         key="deliberation_round2",
+        human=True,
+        reason_prompt="Why are you advancing this architecture discussion?",
         label="Run Round 2",
         group=DELIBERATION_INTENT_GROUP,
         mutating=False,
     ),
     Intent(
         key="deliberation_synthesis",
+        human=True,
+        reason_prompt="Why are you advancing this architecture discussion?",
         label="Generate Final Synthesis",
         group=DELIBERATION_INTENT_GROUP,
         mutating=False,
@@ -810,6 +827,7 @@ class GuiController:
         #: The plan file the operator picked - plain text and a path, never a
         #: core object, and never a second source of truth.
         self._plan_text = ""
+        self._execution_draft = ""
         self._plan_source = ""
         self._plan_preview: Optional[dict[str, Any]] = None
         #: The operator's review question (kept verbatim) and the last review.
@@ -957,6 +975,12 @@ class GuiController:
             return True
         if self._critical:
             return False
+        if intent.key == "prepare_execution_plan":
+            return self.step_count() == 0 and (self._proposal_board.get("latest") or {}).get("status") == "APPROVED"
+        if intent.key in DELIBERATION_INTENTS or intent.key == DELIBERATION_CANCEL_INTENT:
+            if intent.key == "deliberation_round1" and not self._deliberation:
+                return bool(self._proposal_requirement.strip())
+            return intent.key in {key for key, spec in self._deliberation_buttons().items() if spec}
         if intent.key == "load_plan":
             # The initial plan only: a database that already holds steps is
             # never merged, replaced or renumbered by the panel.
@@ -1084,6 +1108,8 @@ class GuiController:
             return self._reconnect_action()
         if intent.key in ("export_markdown", "export_excel"):
             return self._export_action(intent.key)
+        if intent.key == "prepare_execution_plan":
+            return lambda worker: {"execution_draft": worker.prepare_execution_plan()}
         if intent.key == "load_plan":
             return self._preview_action()
         if intent.key == "import_plan":
@@ -1111,24 +1137,19 @@ class GuiController:
     ) -> Callable[[Any], dict[str, Any]]:
         """One deliberation stage - started from the requirement field."""
 
+        requirement = self._proposal_requirement
+        actor = str(self.actor).strip()
+
         def action(worker: Any) -> dict[str, Any]:
-            requirement = self._proposal_requirement
             if key == "deliberation_round1":
-                # The first stage also **starts** (or re-opens) the run, so the
-                # operator never has to press a second button to create one.
                 if not worker.deliberation_board().get("current"):
-                    started = worker.start_deliberation(
-                        requirement, actor=self.actor, reason=reason
-                    )
-                    return {
-                        "deliberation": started["deliberation"],
-                        "board": started["board"],
-                    }
-            return worker.run_deliberation_stage(
-                DELIBERATION_ACTION_BY_INTENT[key],
-                actor=self.actor,
-                reason=reason,
+                    worker.start_deliberation(requirement, actor=actor, reason=reason)
+            if key == DELIBERATION_PROPOSAL_INTENT:
+                return worker.generate_deliberation_proposal(actor=actor, reason=reason)
+            result = worker.run_deliberation_stage(
+                DELIBERATION_ACTION_BY_INTENT[key], actor=actor, reason=reason,
             )
+            return {"deliberation": result["deliberation"], "audit": worker.audit_tail()}
 
         return action
 
@@ -1144,12 +1165,15 @@ class GuiController:
 
     def _read_action(self) -> Callable[[Any], dict[str, Any]]:
         def action(worker: Any) -> dict[str, Any]:
-            return {
+            result = {
                 "payload": worker.payload(),
                 "audit": worker.audit_tail(),
                 "board": worker.proposal_board(),
                 "supervisor": worker.supervisor_status(),
             }
+            if callable(getattr(worker, "deliberation_board", None)):
+                result["deliberation"] = worker.deliberation_board().get("current") or {}
+            return result
 
         return action
 
@@ -1804,6 +1828,7 @@ class GuiController:
         raw = board.get("latest")
         latest = dict(raw) if isinstance(raw, Mapping) else None
         return {
+            "document": proposal_document(latest),
             "available": latest is not None,
             "review_available": bool(board.get("review_available")),
             "synthesizer": bool(board.get("synthesizer")),
@@ -2163,7 +2188,7 @@ class GuiController:
             "deliberation_cancel": ACTION_CANCEL,
         }
         return {
-            key: bool(id_ready and not busy and action in available)
+            key: bool(not busy and ((id_ready and action in available) or (not id_ready and key == "deliberation_round1" and self._proposal_requirement.strip())))
             for key, action in mapping.items()
         }
 
@@ -2798,6 +2823,10 @@ class GuiController:
         audit = payload.get("audit")
         if isinstance(audit, list):
             self._audit = list(audit)
+        draft = payload.get("execution_draft")
+        if isinstance(draft, Mapping):
+            self._execution_draft = str(draft.get("text") or "")
+            self.set_plan(self._execution_draft, source_file=str(draft.get("source") or "generated proposal"))
         plan = payload.get("plan")
         if isinstance(plan, Mapping):
             # A finished preview: plain data, shown by the application.
@@ -2819,7 +2848,7 @@ class GuiController:
                 ),
             )
         board = payload.get("board")
-        if isinstance(board, Mapping):
+        if isinstance(board, Mapping) and ("latest" in board or "proposals" in board):
             # The proposal board: plain data, rendered by the proposal tab.
             self._proposal_board = dict(board)
         supervisor = payload.get("supervisor")
@@ -4121,6 +4150,65 @@ class GuiController:
             )
         return rows
 
+    def button_hint(self, intent: Intent) -> str:
+        if self.enabled(intent):
+            return intent.reason_prompt or intent.label
+        if self.is_busy:
+            return "Wait for the current operation to finish."
+        if intent.key == "prepare_execution_plan":
+            return "Approve an architecture first. A project with an existing plan cannot import another."
+        if intent.key in PROPOSAL_DECISION_INTENTS:
+            return "Generate a draft architecture proposal first."
+        if intent.key in SUPERVISOR_INTENTS:
+            return self.supervisor_refusal(intent.key) or "This report is not ready for that action."
+        if intent.key in DELIBERATION_INTENTS:
+            return "Complete the previous discussion stage first; enter a brief to begin."
+        if intent.key == "run_until_idle":
+            return "Import an execution plan and resume the project first."
+        return "This action is unavailable in the current state. Check the next-step guidance."
+
+    def agent_settings_view(self) -> dict[str, Any]:
+        settings = _mapping(self._payload.get("provider_settings"))
+        stored = _mapping(settings.get("advisors"))
+        return {"catalog": list(settings.get("catalog") or ()), "rows": {
+            slot: {**dict(_mapping(stored.get(slot))),
+                   "connection": self._connection_results.get(f"test_{slot}", "")}
+            for slot in SEATS}}
+
+    def workspace_view(self) -> dict[str, Any]:
+        latest = self._proposal_board.get("latest") or {}
+        stage, text, action, label = "Brief", "Describe your goal, constraints and acceptance criteria.", "nav:Brief", "Write project brief"
+        if self._proposal_requirement.strip():
+            stage, text, action, label = "Discussion", "Configure the architects, then start their independent analysis.", "nav:Agents", "Configure agents"
+            for key, spec in self._deliberation_buttons().items():
+                if key != DELIBERATION_CANCEL_INTENT and spec:
+                    action, label = key, self.intent(key).label
+                    text = "Review the previous result, then advance the discussion."
+                    break
+        if latest:
+            stage, text, action, label = "Architecture", "Read the proposed architecture and approve it or request changes.", "nav:Architecture Proposal", "Read architecture"
+            if latest.get("status") == "APPROVED":
+                stage, text, action, label = "Plan", "Prepare and inspect an execution plan before importing it.", "prepare_execution_plan", "Create Execution Plan"
+        if self._execution_draft and self.step_count() == 0:
+            stage, text, action, label = "Plan", "Review the editable draft, then validate it and confirm import.", "nav:Execution Plan", "Review execution plan"
+        if self.step_count():
+            stage, text, action, label = "Coding", "Advance the workflow to its next decision or worker task.", "run_until_idle", "Run Until Idle"
+            state = self.current_state()
+            if state == "WAITING_APPROVAL":
+                text, action, label = "Your approval is needed for the current step.", "nav:Monitor", "Review current step"
+            elif state in ("BLOCKED", "CONFLICT", "FAILED"):
+                text, action, label = "The current step needs attention. Read its blocker before continuing.", "nav:Monitor", "Inspect blocker"
+            elif state == "RUNNING":
+                text, action, label = "A task is waiting for a worker report. Check the Cline panel.", "nav:Cline", "Open Cline handoff"
+            if self.is_paused():
+                text, action, label = "Project paused. Resume when ready to continue.", "resume_project", "Resume"
+            if _mapping(self._payload.get("health")).get("complete"):
+                stage, text, action, label = "Check", "Workflow complete. Review test evidence and export the result.", "nav:Monitor", "Review completion"
+        if self.is_busy:
+            text = "Working — wait for the current operation to finish."
+        return {"stage": stage, "text": text, "action": action, "label": label,
+                "requirement": self._proposal_requirement, "busy": self.is_busy}
+
     def view_model(self) -> dict[str, Any]:
         """Everything the widgets need - plain data only."""
         project = _mapping(self._payload.get("project"))
@@ -4133,6 +4221,7 @@ class GuiController:
                 "human": intent.human,
                 "reason_prompt": intent.reason_prompt,
                 "confirmation": intent.confirmation,
+                "hint": self.button_hint(intent),
             }
             for intent in INTENTS
         }
@@ -4153,6 +4242,10 @@ class GuiController:
                     f"{bool(health.get('complete'))}"
                 ),
             },
+            "workspace": self.workspace_view(),
+            "agent_settings": self.agent_settings_view(),
+            "channel": dict(_mapping(self._payload.get("channel"))),
+            "execution_draft": self._execution_draft,
             "work": self.work_panel(),
             "buttons": buttons,
             "review": self.review_view(),

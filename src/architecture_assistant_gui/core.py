@@ -20,6 +20,10 @@ results with ``root.after()`` and every action is an explicit operator command.
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from .workspace import execution_plan, cline_handoff
+
 import queue
 import threading
 from dataclasses import dataclass
@@ -33,6 +37,8 @@ from architecture_assistant.composition import (
     ACTION_RUN_ROUND1,
     ACTION_RUN_ROUND2,
     ADVISOR_KEYS,
+    SETTINGS_KEYS,
+    probe_deliberation,
     EVENT_LEVEL_ERROR,
     EVENT_LEVEL_INFO,
     EVENT_LEVEL_WARN,
@@ -284,6 +290,7 @@ class CoreWorker:
             #: plus a mask, never as a value, so no key can reach a widget, the
             #: logs, the audit trail or a report through this payload.
             "provider_settings": self._provider_settings_payload(composition),
+            "channel": self.channel_status(),
             "paths": {
                 "database_path": str(composition.config.database_path),
                 "exchange_dir": str(composition.config.exchange_dir),
@@ -291,6 +298,46 @@ class CoreWorker:
                 "source_root": str(composition.config.source_root),
             },
         }
+
+    def channel_status(self) -> dict[str, Any]:
+        """Observe the exact current attempt; a file is never a worker heartbeat."""
+        composition = self._core()
+        step = composition.monitor.current_step()
+        data = {"exchange_dir": str(composition.config.exchange_dir.resolve()),
+                "source_root": str(composition.config.source_root.resolve()),
+                "status": "No dispatched task", "task_exists": False,
+                "supervisor": "Offline scripted supervisor (not a live AI supervisor)"}
+        if step is not None and step.attempt > 0:
+            channel = composition.worker
+            task = channel.task_path(step.step_no, step.attempt)
+            report = channel.report_path(step.step_no, step.attempt)
+            data.update(task_path=str(task.resolve()), report_path=str(report.resolve()),
+                        context_path=str(channel.context_path(step.step_no, step.attempt).resolve()),
+                        directive_path=str(channel.directive_path(step.step_no, step.attempt).resolve()),
+                        task_exists=task.is_file(), report_exists=report.is_file(),
+                        step_no=step.step_no, attempt=step.attempt, title=step.title)
+            data["status"] = "Task published; waiting for Cline report (execution not confirmed)" if task.is_file() else "Task not published"
+            if report.is_file():
+                try:
+                    result = channel.read_report(step.step_no, step.attempt)
+                    data["status"] = "Report received and structurally validated; run workflow to evaluate"
+                    data["report_summary"] = str(result.summary) if hasattr(result, "summary") else "Report ready"
+                except Exception as error:
+                    data["status"] = f"Report needs correction: {type(error).__name__}"
+            archive = channel.archive_dir() / report.name
+            if not report.is_file() and archive.is_file():
+                data["status"] = "Report processed and archived"
+        data["handoff"] = cline_handoff(data)
+        return data
+
+    def prepare_execution_plan(self) -> dict[str, Any]:
+        composition = self._core()
+        if composition.monitor.to_dict()["steps"]:
+            raise CoreError("This project already has an execution plan; it will not be replaced.")
+        latest = self.proposal_board().get("latest") or {}
+        text = execution_plan(latest, composition.monitor.to_dict()["project"])
+        preview = composition.plan_loader.preview(text).to_dict()
+        return {"text": text, "source": f"proposal:{latest.get('proposal_id')}", "preview": preview}
 
     # -- per-advisor provider configuration --------------------------------
 
@@ -334,7 +381,7 @@ class CoreWorker:
             raise CoreError(f"provider settings must be a mapping; got {payload!r}")
         current = composition.provider_settings
         merged: dict[str, dict[str, str]] = {}
-        for key in ADVISOR_KEYS:
+        for key in SETTINGS_KEYS:
             entry = payload.get(key)
             entry = entry if isinstance(entry, Mapping) else {}
             stored = current.selection(key)
@@ -377,9 +424,12 @@ class CoreWorker:
         """
         composition = self._core()
         credential = api_key
-        if not credential and advisor in ADVISOR_KEYS:
+        if not credential and advisor in SETTINGS_KEYS:
             credential = composition.provider_settings.selection(advisor).api_key
-        status = probe_connection(str(provider), str(model or ""), credential)
+        if advisor in ("agent_a", "agent_b", "lead"):
+            status = probe_deliberation(str(provider), str(model or ""), credential)
+        else:
+            status = probe_connection(str(provider), str(model or ""), credential)
         return {
             "advisor": str(advisor),
             "provider": str(provider),
@@ -654,6 +704,9 @@ class CoreWorker:
         engine = composition.architecture_deliberation
         runs = engine.runs()
         current = self._deliberation_id
+        if not current and runs:
+            current = max(runs, key=lambda run: run.created_at).deliberation_id
+            self._deliberation_id = current
         snapshot = None
         if current:
             try:

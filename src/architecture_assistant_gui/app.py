@@ -25,6 +25,7 @@ import json
 import os
 import sys
 import time
+import subprocess
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
@@ -57,6 +58,8 @@ from .windows import (
     confirm_dialog,
     open_popup,
 )
+from .theme import COLORS, configure as configure_theme
+from .project_setup import show_project_setup, save_preferences
 
 __all__ = [
     "CONFIRM_LABELS",
@@ -159,6 +162,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--workspace",
+        default=None,
+        help="Saved .architecture_assistant/workspace.json created by the project dialog.",
+    )
+    parser.add_argument(
         "--database",
         default=None,
         help="SQLite source of truth (default: the assistant's default path).",
@@ -235,14 +243,24 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 def build_config(args: argparse.Namespace) -> CompositionConfig:
     """The composition configuration: CLI values, else the core defaults."""
     defaults = CompositionConfig()
+    workspace: Mapping[str, Any] = {}
+    if args.workspace:
+        try:
+            raw = json.loads(Path(args.workspace).read_text(encoding="utf-8"))
+            workspace = raw if isinstance(raw, Mapping) else {}
+        except (OSError, ValueError):
+            workspace = {}
+    def choice(name: str, explicit: Any, fallback: Any) -> Any:
+        return explicit if explicit is not None else workspace.get(name, fallback)
     return CompositionConfig(
-        database_path=args.database or defaults.database_path,
-        exchange_dir=Path(args.exchange_dir or defaults.exchange_dir),
-        report_dir=Path(args.report_dir or defaults.report_dir),
-        source_root=Path(args.source_root or defaults.source_root),
-        project_name=args.project_name or defaults.project_name,
-        plan_version=args.plan_version or defaults.plan_version,
-        mode=(Mode[args.mode] if args.mode else defaults.mode),
+        database_path=choice("database_path", args.database, defaults.database_path),
+        exchange_dir=Path(choice("exchange_dir", args.exchange_dir, defaults.exchange_dir)),
+        report_dir=Path(choice("report_dir", args.report_dir, defaults.report_dir)),
+        source_root=Path(choice("source_root", args.source_root, defaults.source_root)),
+        project_name=choice("project_name", args.project_name, defaults.project_name),
+        plan_version=choice("plan_version", args.plan_version, defaults.plan_version),
+        mode=Mode[choice("mode", args.mode, defaults.mode.name)],
+        provider_settings_path=Path(choice("provider_settings_path", None, defaults.provider_settings_path)),
         # Off by default and never persisted: supervision is a per-session
         # operator decision, exactly like the panel's other session-scoped
         # behaviour. Nothing about "is supervision enabled" is stored in the
@@ -423,7 +441,15 @@ class GuiApp:
         # The remembered layout is read once, before the window exists: a file
         # that is missing or damaged simply means the default layout.
         self._load_layout()
-        root = tk.Tk()
+        import customtkinter as ctk
+
+        # CTk paints the dark shell itself, avoiding the white default-Tk flash.
+        ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("blue")
+        ctk.set_window_scaling(1.0)
+        ctk.set_widget_scaling(1.0)
+        root = ctk.CTk(fg_color=COLORS["shell"])
+        configure_theme(root)
         self._root = root
         self._window = MainWindow(
             root,
@@ -463,6 +489,10 @@ class GuiApp:
             return
         parsed = parse_geometry(self._layout.get("geometry"))
         if parsed is None:
+            try:
+                self._root.state("zoomed")
+            except Exception:
+                self._root.geometry("1400x900")
             return
         self._window.place_window(*parsed)
 
@@ -578,6 +608,34 @@ class GuiApp:
 
     def _on_action(self, key: str) -> None:
         """Handle one button press; every dialog happens here, never in a view."""
+        if key.startswith("nav:"):
+            if self._window is not None:
+                self._window.select_tab(key.split(":", 1)[1])
+            return
+        if key == "save_brief":
+            if self._window is not None:
+                self._controller.set_proposal_requirement(self._window.brief_value())
+            self._controller.log("Project brief saved for this session.")
+            self._render()
+            return
+        if key == "validate_draft":
+            self._validate_execution_draft()
+            return
+        if key == "save_plan_draft":
+            self._save_execution_draft()
+            return
+        if key == "copy_cline_handoff":
+            self._copy_cline_handoff()
+            return
+        if key == "open_exchange":
+            self._open_exchange_folder()
+            return
+        if key == "new_project":
+            self._show_project_setup()
+            return
+        if key == "open_guide":
+            self._open_user_guide()
+            return
         try:
             intent = self._controller.intent(key)
         except ValueError as error:
@@ -649,6 +707,62 @@ class GuiApp:
 
         self._controller.submit(key, reason=reason)
         self._render()
+
+    def _validate_execution_draft(self) -> None:
+        if self._window is None:
+            return
+        text = self._window.execution_plan_value()
+        self._controller.set_plan(text, source_file="generated-approved-architecture.json")
+        self._controller.submit("load_plan")
+        self._render()
+
+    def _save_execution_draft(self) -> None:
+        from tkinter import filedialog
+        if self._window is None:
+            return
+        path = filedialog.asksaveasfilename(parent=self._root, title="Save execution plan",
+                                            defaultextension=".json", filetypes=(("JSON plan", "*.json"),))
+        if not path:
+            return
+        try:
+            Path(path).write_text(self._window.execution_plan_value(), encoding="utf-8")
+        except OSError as error:
+            self._notice("Cannot save plan", str(error))
+
+    def _copy_cline_handoff(self) -> None:
+        if self._root is None:
+            return
+        text = str((self._controller.view_model().get("channel") or {}).get("handoff") or "")
+        self._root.clipboard_clear()
+        self._root.clipboard_append(text)
+        self._controller.log("Cline handoff instruction copied to the clipboard.")
+        self._render()
+
+    def _open_exchange_folder(self) -> None:
+        path = str((self._controller.view_model().get("channel") or {}).get("exchange_dir") or "")
+        if path:
+            Path(path).mkdir(parents=True, exist_ok=True)
+            os.startfile(path)
+
+    def _show_project_setup(self) -> None:
+        if self._root is None:
+            return
+        def launch(spec: Mapping[str, Any], actor: str, brief: str) -> None:
+            project_root = Path(spec["source_root"]).resolve()
+            profile = project_root / ".architecture_assistant" / "workspace.json"
+            save_preferences(profile, {**dict(spec), "actor": actor, "brief": brief})
+            args = [sys.executable, "-m", "architecture_assistant_gui",
+                    "--workspace", str(profile)]
+            subprocess.Popen(args, cwd=str(Path(__file__).resolve().parents[2]))
+        show_project_setup(self._root, launch, actor=self._controller.actor,
+                           brief=self._controller.proposal_requirement)
+
+    def _open_user_guide(self) -> None:
+        path = Path(__file__).resolve().parents[2] / "USER_GUIDE_LV.md"
+        if path.is_file():
+            os.startfile(str(path))
+        else:
+            self._notice("User guide", "USER_GUIDE_LV.md is missing.")
 
     def _confirm(self, intent: Any) -> bool:
         """Ask the one modal question this action needs; ``False`` means "no".
@@ -1073,5 +1187,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
         return 3
     config = build_config(args)
-    actor = args.actor if args.actor is not None else load_actor()
-    return GuiApp(config, actor=actor).run()
+    workspace: Mapping[str, Any] = {}
+    if args.workspace:
+        try:
+            loaded = json.loads(Path(args.workspace).read_text(encoding="utf-8"))
+            workspace = loaded if isinstance(loaded, Mapping) else {}
+        except (OSError, ValueError):
+            pass
+    actor = args.actor if args.actor is not None else str(workspace.get("actor") or load_actor())
+    app = GuiApp(config, actor=actor)
+    brief = str(workspace.get("brief") or "")
+    if brief:
+        app.controller.set_proposal_requirement(brief)
+    return app.run()
