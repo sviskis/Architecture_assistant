@@ -1,0 +1,319 @@
+{
+  "controller_policy": {
+    "one_step_at_a_time": true,
+    "plan_before_act": true,
+    "explicit_human_approval_for_high_risk": true,
+    "no_bulk_refactor": true,
+    "verify_after_each_step": true,
+    "stop_after_each_report": true,
+    "python_is_authoritative_controller": true,
+    "codex_is_advisory_supervisor": true,
+    "cline_is_implementation_worker": true,
+    "ai_agents_never_write_controller_db_directly": true,
+    "canonical_plan_document": "BUILD_PLAN.json",
+    "worker_tandem_db_is_execution_snapshot": true,
+    "mini_worker_is_not_plan_source": true
+  },
+  "description": "Canonical Architecture Assistant BUILD_PLAN - the human-readable, editable plan document that lives with the project. Small-step migration from the current software-oriented Architecture Assistant toward a universal category-driven project architecture, research, simulation and execution supervisor. This file is the source of truth for the plan; .worker_tandem/tandem_state.db holds the imported/snapshotted execution state and never replaces this document. Mini Worker is no longer the authoritative plan source.",
+  "plan_version": "2.2",
+  "project_name": "Architecture Assistant Universalization",
+  "steps": [
+    {
+      "description": "Read the actual current HEAD/working tree and map startup, project creation, DB, workspace, Supervisor, Cline, plan flow. Research/PLAN only; no code changes.",
+      "max_attempts": 3,
+      "phase": "RESEARCH",
+      "requires_human": true,
+      "risk": "HIGH",
+      "step_no": 1,
+      "title": "HEAD AUDIT"
+    },
+    {
+      "description": "Introduce a global category catalog that exists before any project DB. Category selection must not depend on project SQLite.",
+      "max_attempts": 3,
+      "phase": "FOUNDATION",
+      "requires_human": true,
+      "risk": "HIGH",
+      "step_no": 2,
+      "title": "GLOBAL CATEGORY CATALOG"
+    },
+    {
+      "description": "Mandatory per-category SPEC.md capability. Every category must carry a human-readable specification document at categories/<category_id>/SPEC.md (the SPEC.md entry named by STEP 2's domain model as SPEC_ENTRY_NAME). SPEC.md is the authoritative category description referenced by STEP 2's global category catalog through REQUIRED_CATEGORY_ENTRIES, and a category must not be ENABLED unless a valid SPEC.md is present. SPEC.md must declare the category's stable identity: the immutable category id slug (^[a-z0-9][a-z0-9_-]*) that names the category folder and is never renamed in place, plus the human-readable display name, bound to the id 1:1 (the display name may evolve; the id may not). SPEC.md must declare a version and a deterministic SHA-256 content hash computed over a canonical serialization of the SPEC content. SPEC content validation and the SPEC hash computation are owned by STEP 3: loading must reject a SPEC.md that is missing, malformed, or whose recomputed hash does not equal the declared hash. STEP 5 (PROJECT CREATION FLOW) persists the category identity, version and SPEC hash into project traceability when a project is created after category selection. STEP 7 (PROJECT_STRATEGY.md) derives the project strategy from this category SPEC together with the project task, expected result and project decisions. STEP 3 scope: define the SPEC.md format/schema, the canonical hash computation, the validation rules and the stable-identity/display-name binding; preserve STEP 2's global catalog and never introduce a project-database dependency.",
+      "max_attempts": 3,
+      "phase": "FOUNDATION",
+      "requires_human": true,
+      "risk": "HIGH",
+      "step_no": 3,
+      "title": "CATEGORY SPEC"
+    },
+    {
+      "description": "Add category-level LIBRARY folder. Files remain primary artifacts; SQL is index/catalog only.",
+      "max_attempts": 3,
+      "phase": "LIBRARY",
+      "requires_human": true,
+      "risk": "MEDIUM",
+      "step_no": 4,
+      "title": "CATEGORY LIBRARY"
+    },
+    {
+      "description": "Create project folder and project DB only after category selection; persist category identity and SPEC version/hash.",
+      "max_attempts": 3,
+      "phase": "FOUNDATION",
+      "requires_human": true,
+      "risk": "HIGH",
+      "step_no": 5,
+      "title": "PROJECT CREATION FLOW"
+    },
+    {
+      "description": "Add canonical project TASK and EXPECTED RESULT with one authoritative source and human-readable projection.",
+      "max_attempts": 3,
+      "phase": "FOUNDATION",
+      "requires_human": true,
+      "risk": "HIGH",
+      "step_no": 6,
+      "title": "TASK + EXPECTED RESULT"
+    },
+    {
+      "description": "Generate/version project strategy from category SPEC + task + expected result + project decisions. Strategy edits require controlled review/audit.",
+      "max_attempts": 3,
+      "phase": "FOUNDATION",
+      "requires_human": true,
+      "risk": "HIGH",
+      "step_no": 7,
+      "title": "PROJECT_STRATEGY.md"
+    },
+    {
+      "description": "Add project LIBRARY folder for PDF, TXT/MD, images, screenshots, sketches and other evidence/reference files.",
+      "max_attempts": 3,
+      "phase": "LIBRARY",
+      "requires_human": false,
+      "risk": "MEDIUM",
+      "step_no": 8,
+      "title": "PROJECT LIBRARY"
+    },
+    {
+      "description": "Treat XLSX/XLSM/CSV as first-class structured Library sources: workbook -> sheet -> table/range -> row/column/value. Optional Excel COM bridge.",
+      "max_attempts": 3,
+      "phase": "LIBRARY",
+      "requires_human": false,
+      "risk": "MEDIUM",
+      "step_no": 9,
+      "title": "EXCEL LIBRARY ADAPTER"
+    },
+    {
+      "description": "Detect manually added files and refresh the index without making SQL the file source of truth.",
+      "max_attempts": 3,
+      "phase": "LIBRARY",
+      "requires_human": false,
+      "risk": "MEDIUM",
+      "step_no": 10,
+      "title": "LIBRARY INDEXER"
+    },
+    {
+      "description": "Build controlled read-only research context from project DB, category SPEC, project strategy and both libraries.",
+      "max_attempts": 3,
+      "phase": "RESEARCH",
+      "requires_human": true,
+      "risk": "HIGH",
+      "step_no": 11,
+      "title": "RESEARCH CONTEXT"
+    },
+    {
+      "description": "Support two independent research agents on the same governed context; preserve separate visible outputs.",
+      "max_attempts": 3,
+      "phase": "RESEARCH",
+      "requires_human": true,
+      "risk": "HIGH",
+      "step_no": 12,
+      "title": "AGENT A / AGENT B"
+    },
+    {
+      "description": "Allow research reports to be imported from TXT/MD and by Copy/Paste.",
+      "max_attempts": 3,
+      "phase": "RESEARCH",
+      "requires_human": false,
+      "risk": "LOW",
+      "step_no": 13,
+      "title": "REPORT IMPORT"
+    },
+    {
+      "description": "Add Human Review Comment and Reject & Request Re-Research; synthesis must remain blocked until accepted.",
+      "max_attempts": 3,
+      "phase": "RESEARCH",
+      "requires_human": true,
+      "risk": "HIGH",
+      "step_no": 14,
+      "title": "HUMAN REVIEW COMMENT"
+    },
+    {
+      "description": "Support research_round 1..N, potentially 100+, bounded by budget/time/stagnation controls with full audit.",
+      "max_attempts": 3,
+      "phase": "RESEARCH",
+      "requires_human": true,
+      "risk": "HIGH",
+      "step_no": 15,
+      "title": "UNBOUNDED RESEARCH ROUNDS"
+    },
+    {
+      "description": "Add explicit web-search capability as a separate research source. Never assume provider models already have web access.",
+      "max_attempts": 3,
+      "phase": "CAPABILITY",
+      "requires_human": true,
+      "risk": "MEDIUM",
+      "step_no": 16,
+      "title": "WEB SEARCH CAPABILITY"
+    },
+    {
+      "description": "Load rules in order: Global SUPERVISOR_RULES.md -> Category SUPERVISOR_RULES.md -> Project PROJECT_STRATEGY.md.",
+      "max_attempts": 3,
+      "phase": "SUPERVISOR",
+      "requires_human": true,
+      "risk": "HIGH",
+      "step_no": 17,
+      "title": "SUPERVISOR RULES"
+    },
+    {
+      "description": "Combine Agent A/B evidence, conflicts, sources and human comments into SUPERVISOR_SYNTHESIS.md without majority voting.",
+      "max_attempts": 3,
+      "phase": "SUPERVISOR",
+      "requires_human": true,
+      "risk": "HIGH",
+      "step_no": 18,
+      "title": "SUPERVISOR SYNTHESIS"
+    },
+    {
+      "description": "Create clickable hierarchical Architecture Tree linked to authoritative SQL/FSM state.",
+      "max_attempts": 3,
+      "phase": "UI",
+      "requires_human": false,
+      "risk": "MEDIUM",
+      "step_no": 19,
+      "title": "ARCHITECTURE TREE VIEW"
+    },
+    {
+      "description": "Drill down to component level, e.g. Sensor -> Hall Sensor 55 -> parameters, connections, logic, states, dependencies, failures.",
+      "max_attempts": 3,
+      "phase": "UI",
+      "requires_human": false,
+      "risk": "MEDIUM",
+      "step_no": 20,
+      "title": "COMPONENT DEEP-DIVE"
+    },
+    {
+      "description": "Add What-If Tree simulation strictly separated from live project state.",
+      "max_attempts": 3,
+      "phase": "SIMULATION",
+      "requires_human": true,
+      "risk": "HIGH",
+      "step_no": 21,
+      "title": "INTERACTIVE SIMULATOR"
+    },
+    {
+      "description": "Simulate Time, Resources, Costs, Failure Injection and Interlocks/Dependencies.",
+      "max_attempts": 3,
+      "phase": "SIMULATION",
+      "requires_human": true,
+      "risk": "HIGH",
+      "step_no": 22,
+      "title": "SIMULATION ENGINE"
+    },
+    {
+      "description": "Support Baseline / Scenario A / Scenario B, versioned and comparable. Simulation never mutates live state.",
+      "max_attempts": 3,
+      "phase": "SIMULATION",
+      "requires_human": true,
+      "risk": "HIGH",
+      "step_no": 23,
+      "title": "SCENARIOS"
+    },
+    {
+      "description": "Promote only an explicitly accepted simulation scenario into a plan candidate.",
+      "max_attempts": 3,
+      "phase": "CONTROL",
+      "requires_human": true,
+      "risk": "HIGH",
+      "step_no": 24,
+      "title": "ACCEPT SCENARIO -> PLAN"
+    },
+    {
+      "description": "Add Codex plan inbox: new_plan/, approved_plan/, act/, archive/.",
+      "max_attempts": 3,
+      "phase": "CODEX",
+      "requires_human": true,
+      "risk": "MEDIUM",
+      "step_no": 25,
+      "title": "CODEX PLAN INBOX"
+    },
+    {
+      "description": "Codex CLI acts primarily as Planner/Architect/Reviewer; Cline as Implementer/Worker; Python remains state/gate/audit authority.",
+      "max_attempts": 3,
+      "phase": "EXECUTION",
+      "requires_human": true,
+      "risk": "HIGH",
+      "step_no": 26,
+      "title": "CODEX <-> CLINE LOOP"
+    },
+    {
+      "description": "Require Python validation + Supervisor check + human approval before promoting a plan to ACT.",
+      "max_attempts": 3,
+      "phase": "CONTROL",
+      "requires_human": true,
+      "risk": "HIGH",
+      "step_no": 27,
+      "title": "ACCEPT -> ACT GATE"
+    },
+    {
+      "description": "Add Mock/Free/Cheap/Standard/Premium routing, provider/model selection, fallback order, token/cost budgets and per-process/per-node policy.",
+      "max_attempts": 3,
+      "phase": "AI",
+      "requires_human": true,
+      "risk": "HIGH",
+      "step_no": 28,
+      "title": "MODEL ROUTER / API POLICY GUI"
+    },
+    {
+      "description": "Detect network loss/restoration, persist safe waiting state and resume only eligible Cline/Codex/API operations idempotently.",
+      "max_attempts": 3,
+      "phase": "RESILIENCE",
+      "requires_human": true,
+      "risk": "HIGH",
+      "step_no": 29,
+      "title": "NETWORK MONITOR / RECOVERY"
+    },
+    {
+      "description": "Normal remote channel is read-only status; decision controls appear only for super-emergency stops.",
+      "max_attempts": 3,
+      "phase": "REMOTE",
+      "requires_human": true,
+      "risk": "MEDIUM",
+      "step_no": 30,
+      "title": "REMOTE STATUS / TELEGRAM"
+    },
+    {
+      "description": "Overlay live progress, worker/supervisor events, risks and states on the architecture tree.",
+      "max_attempts": 3,
+      "phase": "MONITOR",
+      "requires_human": false,
+      "risk": "MEDIUM",
+      "step_no": 31,
+      "title": "FULL TREE PROJECT MONITORING"
+    },
+    {
+      "description": "Preserve current SOFTWARE/Cline behavior and migrate existing databases/projects safely.",
+      "max_attempts": 3,
+      "phase": "COMPATIBILITY",
+      "requires_human": true,
+      "risk": "HIGH",
+      "step_no": 32,
+      "title": "BACKWARD COMPATIBILITY"
+    },
+    {
+      "description": "Run full regression, migration, crash-recovery, audit, simulation-isolation and backward-compatibility verification.",
+      "max_attempts": 3,
+      "phase": "VERIFY",
+      "requires_human": true,
+      "risk": "HIGH",
+      "step_no": 33,
+      "title": "FINAL REGRESSION / RECOVERY TESTS"
+    }
+  ]
+}
