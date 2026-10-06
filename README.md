@@ -480,7 +480,8 @@ On Windows, **START_ARCHITECTURE_ASSISTANT.bat** in the project root does the
 same thing for a double-click: it works from its own directory (`%~dp0`), puts
 `src` on `PYTHONPATH`, finds a usable Python (preferring `py -3.13`, then `py -3`,
 `python`, `python3`; only an interpreter that is 3.11+, has tkinter and can
-import the panel is accepted), starts the panel **without a console window** and
+import the panel is accepted; `customtkinter` must be importable too), starts the
+panel **without a console window** and
 closes itself, so nothing is left open. Anything it cannot start is reported in
 its own window, which then waits for a key press, and the panel's own startup
 output is kept in `%TEMP%\architecture_assistant_gui_launch.log`.

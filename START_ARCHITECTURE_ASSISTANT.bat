@@ -7,7 +7,7 @@ rem   1. works from its own directory (%~dp0), so the project can live anywhere
 rem   2. puts the project's own src tree on PYTHONPATH
 rem   3. finds a usable Python (prefers "py -3.13", then "py -3", "python",
 rem      "python3"; a candidate is only used when it is Python 3.11 or newer,
-rem      has tkinter and can import the operator panel)
+rem      has tkinter and customtkinter and can import the operator panel)
 rem   4. starts "python -m architecture_assistant_gui" WITHOUT a console window
 rem      and closes this console immediately, so no stray window is left open
 rem
@@ -75,6 +75,8 @@ if not defined CANDNUM goto :eof
 if %CANDNUM% LSS 311 goto :eof
 "%CANDEXE%" -c "import tkinter" >nul 2>&1
 if errorlevel 1 goto :eof
+"%CANDEXE%" -c "import customtkinter" >nul 2>&1
+if errorlevel 1 goto :eof
 "%CANDEXE%" -c "import architecture_assistant_gui" >nul 2>&1
 if errorlevel 1 goto :eof
 set "PYEXE=%CANDEXE%"
@@ -93,7 +95,7 @@ goto :fail
 echo Architecture Assistant failed to start.
 echo No usable Python interpreter was found.
 echo Looked for: py -3.13, py -3, python, python3.
-echo A candidate must be Python 3.11 or newer, have tkinter, and be able to
+echo A candidate must be Python 3.11 or newer, have tkinter and customtkinter, and be able to
 echo import architecture_assistant_gui with PYTHONPATH="%PYTHONPATH%".
 echo Install Python 3.11 or newer from https://www.python.org/downloads/
 echo (keep the "tcl/tk" option) and try again.

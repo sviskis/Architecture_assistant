@@ -1361,7 +1361,11 @@ class GuiController:
         entry = self._provider_entry(slot)
 
         def action(worker: Any) -> dict[str, Any]:
+            stored = worker.save_provider_settings({slot: entry})
+            if not stored.get("saved"):
+                raise RuntimeError("Cannot save agent settings; connection test was not started.")
             return {
+                "settings": stored,
                 "connection": worker.test_connection(
                     slot,
                     entry["provider"],
@@ -2215,6 +2219,8 @@ class GuiController:
                 f"{snapshot.get('max_review_rounds', 1)}, revision "
                 f"{snapshot.get('revision_no', 1)})"
             )
+        if snapshot.get("error_reason"):
+            status += " — " + str(snapshot["error_reason"])
         if cost.get("available"):
             cost_line = (
                 f"Total deliberation cost: {cost.get('total_usd')} USD "
@@ -2892,6 +2898,8 @@ class GuiController:
         so this method cannot render a secret even by accident.
         """
         saved = bool(outcome.get("saved"))
+        if saved and isinstance(outcome.get("provider_settings"), Mapping):
+            self._payload["provider_settings"] = dict(outcome["provider_settings"])
         path = str(outcome.get("path") or "the provider settings file")
         self._provider_note = (
             "provider settings saved" if saved else "provider settings not saved"
@@ -2919,11 +2927,21 @@ class GuiController:
         ``DISABLED``, and nothing else is read from the payload.
         """
         status = str(outcome.get("status") or "")
-        self._connection_results[label] = status
+        http_status = outcome.get("http_status")
+        display = status
+        if isinstance(http_status, int) and 100 <= http_status <= 599 and status != "CONNECTED":
+            hint = {
+                400: "Request or model rejected", 401: "Invalid API key",
+                403: "Access denied", 404: "Model unavailable",
+                429: "Quota or rate limit reached", 500: "Provider server error",
+                502: "Provider gateway error", 503: "Provider temporarily unavailable",
+            }.get(http_status, "Request failed")
+            display = f"{status} — HTTP {http_status}: {hint}"
+        self._connection_results[label] = display
         provider = str(outcome.get("provider") or "?")
         self._log_action(
             label,
-            f"Test Connection ({provider}): {status or 'no verdict'}.",
+            f"Test Connection ({provider}): {display or 'no verdict'}.",
             level=EVENT_LEVEL_INFO if status == "CONNECTED" else EVENT_LEVEL_WARN,
         )
 

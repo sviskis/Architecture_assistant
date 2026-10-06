@@ -55,10 +55,19 @@ def execution_plan(proposal, project):
         raise ValueError("The approved architecture has no modules to implement.")
     by_name = {}
     for module in modules:
+        module = dict(module)
+        # Synthesis can preserve a module as a descriptive text record.
+        # Split only its explicit name/description separator; never invent names.
+        if not module.get("name") and isinstance(module.get("text"), str):
+            name, separator, responsibility = module["text"].partition(":")
+            if separator:
+                module["name"] = name.strip()
+                module.setdefault("responsibility", responsibility.strip())
         name = str(module.get("name") or "").strip()
         if not name or name in by_name:
             raise ValueError("Architecture modules need unique, non-empty names.")
         by_name[name] = module
+        module["name"] = name
     ordered, visiting, visited = [], set(), set()
 
     def visit(name):

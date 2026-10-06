@@ -488,21 +488,21 @@ class MainWindow(WorkspaceViews):
         identity = ctk.CTkFrame(frame, fg_color=COLORS["shell"], corner_radius=0)
         identity.grid(row=0, column=0, sticky="w")
         ctk.CTkLabel(identity, text="ARCHITECTURE ASSISTANT", text_color=COLORS["muted"],
-                     font=(FONT, 9, "bold")).pack(anchor="w")
+                     font=(FONT, 14, "bold")).pack(anchor="w")
         ctk.CTkLabel(identity, textvariable=self._var("project"), text_color=COLORS["primary"],
-                     font=(FONT, 16, "bold")).pack(anchor="w")
+                     font=(FONT, 24, "bold")).pack(anchor="w")
 
         chips = ctk.CTkFrame(frame, fg_color=COLORS["shell"], corner_radius=0)
         chips.grid(row=0, column=1)
         for key in ("mode", "project_state", "architecture", "health"):
             ctk.CTkLabel(chips, textvariable=self._var(key), text_color=COLORS["secondary"],
                          fg_color=COLORS["card"], corner_radius=12,
-                         font=(FONT, 10), padx=11, pady=3).pack(side="left", padx=4)
+                         font=(FONT, 15), padx=11, pady=3).pack(side="left", padx=4)
 
         operator = ctk.CTkFrame(frame, fg_color=COLORS["shell"], corner_radius=0)
         operator.grid(row=0, column=2, sticky="e")
         ctk.CTkLabel(operator, text="OPERATOR", text_color=COLORS["muted"],
-                     font=(FONT, 9, "bold")).pack(anchor="e")
+                     font=(FONT, 14, "bold")).pack(anchor="e")
         self._actor = ctk.CTkEntry(operator, width=190, height=29,
                                    fg_color=COLORS["field"], border_color=COLORS["border"],
                                    text_color=COLORS["primary"])
@@ -592,7 +592,7 @@ class MainWindow(WorkspaceViews):
         dock.rowconfigure(1, weight=1)
         dock.columnconfigure(0, weight=1)
         ctk.CTkLabel(dock, text="ACTIONS", text_color=COLORS["secondary"],
-                     font=(FONT, 11, "bold"), anchor="w").grid(row=0, column=0, sticky="ew", padx=14, pady=(14, 8))
+                     font=(FONT, 17, "bold"), anchor="w").grid(row=0, column=0, sticky="ew", padx=14, pady=(14, 8))
         actions = ctk.CTkScrollableFrame(dock, fg_color=COLORS["sidebar"],
                                          corner_radius=0, scrollbar_button_color=COLORS["border"],
                                          scrollbar_button_hover_color=COLORS["muted"])
@@ -608,7 +608,7 @@ class MainWindow(WorkspaceViews):
             group_frame.columnconfigure(0, weight=1)
             self._action_groups[group] = group_frame
             ctk.CTkLabel(group_frame, text=group.upper(), text_color=COLORS["muted"],
-                         font=(FONT, 9, "bold"), anchor="w").grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 3))
+                         font=(FONT, 14, "bold"), anchor="w").grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 3))
             for row, intent in enumerate((i for i in INTENTS if i.group == group), 1):
                 primary = intent.key in {"run_review", "run_until_idle", "prepare_execution_plan"}
                 button = dark_button(group_frame, intent.label,
@@ -1055,7 +1055,8 @@ class MainWindow(WorkspaceViews):
             return
         self._var("deliberation_status").set(str(view.get("status", "")))
         self._var("deliberation_requirement").set(
-            str(view.get("requirement", ""))
+            "Brief: " + " ".join(str(view.get("requirement", "")).split())[:240]
+            + ("… (pilns teksts cilnē Brief)" if len(str(view.get("requirement", ""))) > 240 else "")
         )
         self._var("deliberation_cost").set(str(view.get("cost", "")))
         for slot in ("agent_a", "lead", "agent_b"):
@@ -1349,7 +1350,7 @@ class MainWindow(WorkspaceViews):
         dot.pack(side="left", padx=(0, 7))
         dot.pack_propagate(False)
         title = ctk.CTkLabel(heading, text="Advisor", text_color=COLORS["primary"],
-                             font=(FONT, 13, "bold"))
+                             font=(FONT, 20, "bold"))
         title.pack(side="left")
 
         settings = ctk.CTkFrame(pane, fg_color=COLORS["field"], corner_radius=5,
@@ -1416,7 +1417,7 @@ class MainWindow(WorkspaceViews):
         status = ctk.CTkLabel(
             pane,
             textvariable=self._var(status_key),
-            font=(FONT, 11, "bold"),
+            font=(FONT, 17, "bold"),
             text_color=COLORS["secondary"],
         )
         status.grid(row=2, column=0, sticky="w", padx=10, pady=(4, 0))

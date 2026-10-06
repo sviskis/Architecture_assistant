@@ -108,6 +108,7 @@ SUPPORTED_PROVIDERS: tuple[str, ...] = (
     "claude",
     "grok",
     "deepseek",
+    "gemini",
     "disabled",
 )
 
@@ -117,6 +118,7 @@ PROVIDER_LABELS: dict[str, str] = {
     "claude": "Claude",
     "grok": "Grok",
     "deepseek": "DeepSeek",
+    "gemini": "Gemini",
     "disabled": "Disabled",
 }
 

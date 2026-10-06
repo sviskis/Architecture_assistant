@@ -59,6 +59,7 @@ from .windows import (
     open_popup,
 )
 from .theme import COLORS, configure as configure_theme
+from .category_select import load_category_rows, show_category_manager
 from .project_setup import show_project_setup, save_preferences
 
 __all__ = [
@@ -534,6 +535,8 @@ class GuiApp:
 
     def _pump(self) -> None:
         """Drain finished core results - the queue, never the workflow."""
+        if getattr(self, "_closing_settings", False):
+            return
         # Progress first, then the richer events (which set the stage label), so
         # the operator sees which stage the review is in while it is still running.
         self._controller.drain_progress(self._runner.progress())
@@ -599,10 +602,42 @@ class GuiApp:
         from the window itself - and before the core thread is stopped, so a
         slow shutdown can never lose it.
         """
+        if getattr(self, "_closing_settings", False):
+            return
+        if self._window is not None and self._root is not None and self._runner.is_running:
+            self._closing_settings = True
+            payload = self._window.provider_settings_values()
+            self._save_settings_before_close(payload)
+            return
+        self._finish_close()
+
+    def _finish_close(self) -> None:
         self._remember_layout()
         self._runner.stop()
         if self._root is not None:
             self._root.destroy()
+
+    def _save_settings_before_close(self, payload: Mapping[str, Any], submitted: bool = False) -> None:
+        # Let any current job finish; SQLite and provider settings stay on the
+        # core thread. Keep Tk responsive while waiting for the save result.
+        if not submitted:
+            if self._runner.is_busy:
+                self._root.after(100, lambda: self._save_settings_before_close(payload))
+                return
+            for result in self._runner.poll():
+                self._controller.apply_result(result)
+            self._runner.submit("save_on_close", lambda worker: worker.save_provider_settings(payload))
+        for result in self._runner.poll():
+            if result.label != "save_on_close":
+                continue
+            if result.error or not (result.payload or {}).get("saved"):
+                self._closing_settings = False
+                self._notice("Settings not saved", "Cannot save agent settings. The window remains open so your entries are not lost.")
+                self._root.after(self._interval, self._pump)
+                return
+            self._finish_close()
+            return
+        self._root.after(100, lambda: self._save_settings_before_close(payload, True))
 
     # -- operator actions --------------------------------------------------
 
@@ -754,8 +789,34 @@ class GuiApp:
             args = [sys.executable, "-m", "architecture_assistant_gui",
                     "--workspace", str(profile)]
             subprocess.Popen(args, cwd=str(Path(__file__).resolve().parents[2]))
+        categories = self._category_rows()
+        if categories is None:
+            return
         show_project_setup(self._root, launch, actor=self._controller.actor,
-                           brief=self._controller.proposal_requirement)
+                           brief=self._controller.proposal_requirement,
+                           categories=categories, on_manage=self._manage_categories)
+
+    def _category_rows(self) -> Any:
+        """Every global category row, or ``None`` when the catalog is unusable.
+
+        Fail-closed: a missing or unwritable ``%LOCALAPPDATA%`` refuses this panel
+        action with one readable window instead of guessing a location. The panel
+        never writes the catalog; it only reads it and calls the audited core API.
+        """
+        try:
+            return load_category_rows()
+        except Exception as error:  # noqa: BLE001 - never fatal, always explained
+            self._notice("Global category catalog", str(error))
+            return None
+
+    def _manage_categories(self) -> None:
+        """Open the minimal category manager (register / enable / disable)."""
+        if self._root is None:
+            return
+        try:
+            show_category_manager(self._root, actor=self._controller.actor)
+        except Exception as error:  # noqa: BLE001 - never fatal, always explained
+            self._notice("Global category catalog", str(error))
 
     def _open_user_guide(self) -> None:
         path = Path(__file__).resolve().parents[2] / "USER_GUIDE_LV.md"

@@ -5,7 +5,7 @@ rem
 rem Same detection as START_ARCHITECTURE_ASSISTANT.bat (see that file for the
 rem details): works from its own directory, sets PYTHONPATH to the project's
 rem src tree, prefers "py -3.13", and only accepts a Python that is 3.11 or
-rem newer, has tkinter and can import the operator panel.
+rem newer, has tkinter and customtkinter and can import the operator panel.
 rem
 rem This version runs the panel in this window instead of hiding it, so its log
 rem output is visible, and the window stays open after the panel closes: use it
@@ -69,6 +69,8 @@ if not defined CANDNUM goto :eof
 if %CANDNUM% LSS 311 goto :eof
 "%CANDEXE%" -c "import tkinter" >nul 2>&1
 if errorlevel 1 goto :eof
+"%CANDEXE%" -c "import customtkinter" >nul 2>&1
+if errorlevel 1 goto :eof
 "%CANDEXE%" -c "import architecture_assistant_gui" >nul 2>&1
 if errorlevel 1 goto :eof
 set "PYEXE=%CANDEXE%"
@@ -87,7 +89,7 @@ goto :fail
 echo Architecture Assistant failed to start.
 echo No usable Python interpreter was found.
 echo Looked for: py -3.13, py -3, python, python3.
-echo A candidate must be Python 3.11 or newer, have tkinter, and be able to
+echo A candidate must be Python 3.11 or newer, have tkinter and customtkinter, and be able to
 echo import architecture_assistant_gui with PYTHONPATH="%PYTHONPATH%".
 echo Install Python 3.11 or newer from https://www.python.org/downloads/
 echo (keep the "tcl/tk" option) and try again.

@@ -15,7 +15,7 @@ class WorkspaceViews:
                              border_width=1, border_color=COLORS["border"])
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(0, weight=1)
-        text = ctk.CTkTextbox(frame, wrap="word", font=(FONT, 12), fg_color=COLORS["field"],
+        text = ctk.CTkTextbox(frame, wrap="word", font=(FONT, 18), fg_color=COLORS["field"],
                               text_color=COLORS["primary"], border_width=0,
                               scrollbar_button_color=COLORS["border"], undo=editable)
         text.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
@@ -39,7 +39,7 @@ class WorkspaceViews:
         rail.grid(row=0, column=0, sticky="ns")
         rail.grid_propagate(False)
         ctk.CTkLabel(rail, text="PROJECT", text_color=COLORS["secondary"],
-                     font=(FONT, 11, "bold")).pack(anchor="w", padx=14, pady=(15, 10))
+                     font=(FONT, 17, "bold")).pack(anchor="w", padx=14, pady=(15, 10))
         self._nav_buttons = {}
         for title, label in (("Brief", "1  Project brief"), ("Deliberation", "2  Discussion"),
                              ("Architecture Proposal", "3  Architecture"), ("Execution Plan", "4  Execution plan"),
@@ -59,7 +59,7 @@ class WorkspaceViews:
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(2, weight=1)
         ctk.CTkLabel(frame, text="What would you like to build?", text_color=COLORS["primary"],
-                     font=(FONT, 20, "bold")).grid(row=0, sticky="w", padx=14, pady=(14, 0))
+                     font=(FONT, 30, "bold")).grid(row=0, sticky="w", padx=14, pady=(14, 0))
         ctk.CTkLabel(frame, text="Describe the goal, existing project, constraints and acceptance criteria. The architects receive this text.",
                      text_color=COLORS["secondary"], wraplength=720).grid(row=1, sticky="ew", padx=14, pady=8)
         editor, self._brief_editor = self._document(frame, editable=True)
@@ -87,7 +87,7 @@ class WorkspaceViews:
     def _build_agents_tab(self, notebook):
         frame = ctk.CTkFrame(notebook, fg_color=COLORS["shell"], corner_radius=0)
         frame.columnconfigure(0, weight=1)
-        ctk.CTkLabel(frame, text="Architecture discussion team", text_color=COLORS["primary"], font=(FONT, 19, "bold")).grid(row=0, sticky="w")
+        ctk.CTkLabel(frame, text="Architecture discussion team", text_color=COLORS["primary"], font=(FONT, 29, "bold")).grid(row=0, sticky="w")
         ctk.CTkLabel(frame, text="Separate from the three Quick Review advisors. Blank key keeps the stored credential; model may be left at its provider default.",
                      text_color=COLORS["secondary"], wraplength=760).grid(row=1, sticky="ew", pady=(6, 12))
         self._agent_fields = {}
@@ -98,15 +98,17 @@ class WorkspaceViews:
             card.columnconfigure(1, weight=1)
             card.columnconfigure(3, weight=1)
             ctk.CTkLabel(card, text=SEAT_LABELS[slot], text_color=COLORS["primary"],
-                         font=(FONT, 13, "bold")).grid(row=0, column=0, columnspan=4, sticky="w", padx=10, pady=(8, 4))
+                         font=(FONT, 20, "bold")).grid(row=0, column=0, columnspan=4, sticky="w", padx=10, pady=(8, 4))
             ctk.CTkLabel(card, text="Provider", text_color=COLORS["secondary"]).grid(row=1, column=0, sticky="w", padx=10)
-            provider = ttk.Combobox(card, state="readonly", width=14)
+            provider = ttk.Combobox(card, state="readonly", width=14, style="Agent.TCombobox")
             provider.grid(row=1, column=1, sticky="ew")
             ctk.CTkLabel(card, text="Model", text_color=COLORS["secondary"]).grid(row=1, column=2, padx=8)
             model = ttk.Entry(card, width=18)
             model.grid(row=1, column=3, sticky="ew", padx=(0, 10))
             ctk.CTkLabel(card, text="API key", text_color=COLORS["secondary"]).grid(row=2, column=0, sticky="w", padx=10, pady=6)
-            key = ttk.Entry(card, show="*", width=18)
+            key = ctk.CTkEntry(card, show="*", placeholder_text="Ievadi API atslēgu",
+                              fg_color=COLORS["field"], text_color=COLORS["primary"],
+                              border_color=COLORS["border"])
             key.grid(row=2, column=1, columnspan=3, sticky="ew", pady=6, padx=(0, 10))
             label = ctk.CTkLabel(card, text="", text_color=COLORS["muted"])
             label.grid(row=3, column=0, columnspan=3, sticky="w", padx=10, pady=(0, 8))
@@ -125,7 +127,7 @@ class WorkspaceViews:
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(2, weight=1)
         ctk.CTkLabel(frame, text="Execution plan · editable draft", text_color=COLORS["primary"],
-                     font=(FONT, 19, "bold")).grid(row=0, sticky="w", padx=14, pady=(14, 0))
+                     font=(FONT, 29, "bold")).grid(row=0, sticky="w", padx=14, pady=(14, 0))
         ctk.CTkLabel(frame, text="Generated from your approved architecture, in dependency order. Review scope and acceptance criteria before importing. Validation changes no workflow state.",
                      text_color=COLORS["secondary"], wraplength=760).grid(row=1, sticky="ew", padx=14, pady=8)
         editor, self._execution_editor = self._document(frame, editable=True)
@@ -142,7 +144,7 @@ class WorkspaceViews:
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(2, weight=1)
         ctk.CTkLabel(frame, text="Cline · task handoff", text_color=COLORS["primary"],
-                     font=(FONT, 19, "bold")).grid(row=0, sticky="w", padx=14, pady=(14, 0))
+                     font=(FONT, 29, "bold")).grid(row=0, sticky="w", padx=14, pady=(14, 0))
         ctk.CTkLabel(frame, textvariable=self._var("channel_status"), text_color=COLORS["accent"],
                      wraplength=760).grid(row=1, sticky="ew", padx=14, pady=10)
         doc, self._channel_document = self._document(frame)
@@ -168,7 +170,7 @@ class WorkspaceViews:
                                 border_width=1, border_color=COLORS["border"])
         feedback.grid(row=1, sticky="ew", pady=6)
         ctk.CTkLabel(feedback, text="REVISION FEEDBACK", text_color=COLORS["muted"],
-                     font=(FONT, 9, "bold")).pack(anchor="w", padx=10, pady=(6, 2))
+                     font=(FONT, 14, "bold")).pack(anchor="w", padx=10, pady=(6, 2))
         self._revision_feedback_field = ctk.CTkTextbox(feedback, height=74, wrap="word",
                                                        fg_color=COLORS["field"], text_color=COLORS["primary"])
         self._revision_feedback_field.pack(fill="x", padx=6, pady=(0, 6))
@@ -206,6 +208,7 @@ class WorkspaceViews:
             fields["provider"].configure(values=options)
             for key in ("provider", "model"):
                 self._refresh_field(fields, key, str(row.get(key) or ""))
+            fields["key"].configure(placeholder_text="API atslēga saglabāta" if row.get("key_set") else "Ievadi API atslēgu")
             fields["label"].configure(text=("Key stored" if row.get("key_set") else "No stored key / environment fallback") + "  " + str(row.get("connection") or ""))
         for key, spec in (view.get("buttons") or {}).items():
             button = self.buttons.get(key)

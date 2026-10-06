@@ -102,7 +102,7 @@ class TestAdapters:
     def test_the_chat_dialect_serves_openai_grok_and_deepseek(self) -> None:
         body = chat_body({"proposal_summary": "plan", "modules": []})
 
-        for provider in ("openai", "grok", "deepseek"):
+        for provider in ("openai", "grok", "deepseek", "gemini"):
             adapter = DeliberationAgentAdapter(
                 provider, "a-model", "a-key", transport=transport_for(body)
             )

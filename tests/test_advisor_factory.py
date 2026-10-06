@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 import pytest
+from architecture_assistant.infrastructure.gemini import DEFAULT_GEMINI_MODEL, GeminiAdvisorAdapter
 
 from architecture_assistant.application import (
     AdvisorObservation,
@@ -141,6 +142,7 @@ class TestCatalog:
             "claude",
             "grok",
             "deepseek",
+            "gemini",
             "disabled",
         ]
         assert [entry["label"] for entry in catalog] == [
@@ -148,6 +150,7 @@ class TestCatalog:
             "Claude",
             "Grok",
             "DeepSeek",
+            "Gemini",
             "Disabled",
         ]
 
@@ -163,6 +166,7 @@ class TestCatalog:
             "claude": DEFAULT_CLAUDE_MODEL,
             "grok": DEFAULT_GROK_MODEL,
             "deepseek": DEFAULT_DEEPSEEK_MODEL,
+            "gemini": DEFAULT_GEMINI_MODEL,
             "disabled": "",
         }
         assert default_model_for("deepseek") == DEFAULT_DEEPSEEK_MODEL
@@ -183,6 +187,7 @@ class TestCreate:
             ("claude", ClaudeAdvisorAdapter),
             ("grok", GrokAdvisorAdapter),
             ("deepseek", DeepSeekAdvisorAdapter),
+            ("gemini", GeminiAdvisorAdapter),
             ("disabled", DisabledAdvisorAdapter),
         ],
     )
@@ -215,7 +220,7 @@ class TestCreate:
 
     def test_an_unknown_provider_is_refused(self) -> None:
         with pytest.raises(ValueError, match="provider must be one of"):
-            AdvisorFactory.create("gemini", "", None)
+            AdvisorFactory.create("unsupported-provider", "", None)
 
     def test_a_non_string_credential_is_refused_without_echoing_it(self) -> None:
         with pytest.raises(ValueError):

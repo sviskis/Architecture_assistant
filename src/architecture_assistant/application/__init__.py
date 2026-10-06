@@ -71,6 +71,18 @@ from .orchestrator import (
     OrchestratorError,
     TickResult,
 )
+from .category_catalog import (
+    CategoryActorRequiredError,
+    CategoryCatalogError,
+    CategoryCatalogUseCase,
+    CategoryExistsError,
+    CategoryInvalidIdError,
+    CategoryMetadataError,
+    CategoryNameConflictError,
+    CategoryNotFoundError,
+    CategoryNotReadyError,
+    CategoryReasonRequiredError,
+)
 from .scheduler import (
     DEFAULT_MAX_ITERATIONS,
     LoopHealth,
@@ -566,4 +578,15 @@ __all__ = [
     "component_for",
     "exception_reason",
     "sanitize_text",
+    # the global category catalog (Step 2)
+    "CategoryCatalogUseCase",
+    "CategoryCatalogError",
+    "CategoryNotFoundError",
+    "CategoryInvalidIdError",
+    "CategoryExistsError",
+    "CategoryNotReadyError",
+    "CategoryActorRequiredError",
+    "CategoryReasonRequiredError",
+    "CategoryMetadataError",
+    "CategoryNameConflictError",
 ]

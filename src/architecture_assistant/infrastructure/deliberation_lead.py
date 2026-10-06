@@ -75,6 +75,10 @@ from .claude import (
     DEFAULT_CLAUDE_MAX_OUTPUT_TOKENS,
     DEFAULT_CLAUDE_MODEL,
 )
+from .gemini import (
+    GEMINI_PROVIDER, GEMINI_CHAT_COMPLETIONS_URL, GEMINI_API_KEY_ENV_VAR,
+    GEMINI_MODEL_ENV_VAR, DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_MAX_OUTPUT_TOKENS,
+)
 from .deepseek import (
     DEEPSEEK_API_KEY_ENV_VAR,
     DEEPSEEK_CHAT_COMPLETIONS_URL,
@@ -148,6 +152,7 @@ DELIBERATION_LEAD_ROLE = "architecture chair"
 #: Which providers this build can actually serve as a seat or as the chair. It is
 #: deliberately the same closed set the provider settings offer.
 DELIBERATION_LEAD_PROVIDERS: tuple[str, ...] = (
+    GEMINI_PROVIDER,
     OPENAI_PROVIDER,
     CLAUDE_PROVIDER,
     GROK_PROVIDER,
@@ -182,6 +187,15 @@ class _ProviderProfile:
 
 
 _PROFILES: dict[str, _ProviderProfile] = {
+    GEMINI_PROVIDER: _ProviderProfile(
+        provider=GEMINI_PROVIDER,
+        endpoint=GEMINI_CHAT_COMPLETIONS_URL,
+        key_env_var=GEMINI_API_KEY_ENV_VAR,
+        model_env_var=GEMINI_MODEL_ENV_VAR,
+        default_model=DEFAULT_GEMINI_MODEL,
+        max_output_tokens=16384,
+        style="chat",
+    ),
     OPENAI_PROVIDER: _ProviderProfile(
         provider=OPENAI_PROVIDER,
         endpoint=OPENAI_CHAT_COMPLETIONS_URL,
@@ -206,7 +220,7 @@ _PROFILES: dict[str, _ProviderProfile] = {
         key_env_var=DEEPSEEK_API_KEY_ENV_VAR,
         model_env_var=DEEPSEEK_MODEL_ENV_VAR,
         default_model=DEFAULT_DEEPSEEK_MODEL,
-        max_output_tokens=DEFAULT_DEEPSEEK_MAX_OUTPUT_TOKENS,
+        max_output_tokens=16384,
         style="chat",
     ),
     CLAUDE_PROVIDER: _ProviderProfile(
@@ -215,7 +229,7 @@ _PROFILES: dict[str, _ProviderProfile] = {
         key_env_var=CLAUDE_API_KEY_ENV_VAR,
         model_env_var=CLAUDE_MODEL_ENV_VAR,
         default_model=DEFAULT_CLAUDE_MODEL,
-        max_output_tokens=DEFAULT_CLAUDE_MAX_OUTPUT_TOKENS,
+        max_output_tokens=16384,
         style="messages",
     ),
 }
@@ -275,7 +289,7 @@ def _extract_object(text: str) -> dict[str, Any]:
             "the provider answer carried no JSON object"
         )
     try:
-        parsed = json.loads(candidate[start : end + 1])
+        parsed, _ = json.JSONDecoder().raw_decode(candidate[start:])
     except ValueError as error:
         raise DeliberationInvalidResponseError(
             "the provider answer was not valid JSON"
@@ -300,6 +314,16 @@ def _prompt(
         + json.dumps(dict(payload), sort_keys=True, default=str)
         + "\n\nREQUIRED JSON KEYS:\n"
         + ", ".join(schema)
+        + (
+            "\nSTRICT FIELD TYPES: proposal_summary must be a non-empty string; "
+            "confidence must be a JSON number between 0 and 1. "
+            "modules, dependencies, data_flows, external_dependencies, architecture_choices, "
+            "risks, alternatives, recommended_decisions and evidence must each be an array "
+            "of JSON objects, never strings or an object keyed by names. "
+            "assumptions and open_questions must each be an array of strings. "
+            "Use [] for an empty section."
+            if "proposal_summary" in schema else ""
+        )
     )
 
 
@@ -352,6 +376,11 @@ class _DeliberationClient:
         self._clock = clock
         self._transport = transport or urllib_transport
         self._sleep = sleep or time.sleep
+        if self._provider in (GEMINI_PROVIDER, DEEPSEEK_PROVIDER, CLAUDE_PROVIDER):
+            if timeout == DEFAULT_TIMEOUT_SECONDS:
+                timeout = 120.0
+            if max_output_tokens == DEFAULT_DELIBERATION_MAX_OUTPUT_TOKENS:
+                max_output_tokens = 16384
         self._timeout = float(timeout)
         self._max_retries = int(max_retries)
         self._backoff = tuple(backoff)
@@ -411,17 +440,20 @@ class _DeliberationClient:
                 "temperature": DEFAULT_DELIBERATION_TEMPERATURE,
                 "messages": [{"role": "user", "content": prompt}],
             }
+        if self._provider in (GEMINI_PROVIDER, DEEPSEEK_PROVIDER):
+            payload["response_format"] = {"type": "json_object"}
         return json.dumps(payload).encode("utf-8")
 
     def _text(self, payload: Mapping[str, Any]) -> str:
         if self._profile.style == "messages":
             blocks = payload.get("content") or ()
             if isinstance(blocks, Sequence):
-                for block in blocks:
-                    if isinstance(block, Mapping) and isinstance(
-                        block.get("text"), str
-                    ):
-                        return block["text"]
+                text = "".join(
+                    block["text"] for block in blocks
+                    if isinstance(block, Mapping) and isinstance(block.get("text"), str)
+                )
+                if text:
+                    return text
             raise DeliberationInvalidResponseError(
                 "the provider answer carried no text block"
             )
@@ -596,6 +628,21 @@ class _DeliberationClient:
         if not self.is_configured:
             return ConnectionStatus.AUTH_ERROR.value
         prompt = 'Return exactly this JSON object and nothing else: {"ok": true}'
+        if self._provider == GEMINI_PROVIDER:
+            # A connectivity probe checks HTTP access; it must not require a
+            # generated JSON answer or lose a 4xx behind request() exceptions.
+            from ._http import _classify_connection_status
+
+            try:
+                response = self._transport(HttpRequest(
+                    url=self._profile.endpoint,
+                    body=self._body(prompt),
+                    headers=self._headers(),
+                    timeout=self._timeout,
+                ))
+            except HttpTransportError:
+                return ConnectionStatus.NETWORK_ERROR.value
+            return _classify_connection_status(response.status_code).value
         try:
             response = self.request(prompt)
         except DeliberationMissingApiKeyError:

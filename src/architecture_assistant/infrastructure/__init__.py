@@ -47,6 +47,25 @@ from .cline import (
     ReportParseError,
     TaskDispatchError,
 )
+from .category_catalog import (
+    CATALOG_AUDIT_TABLE_NAME,
+    CATALOG_BOOTSTRAP_SQL,
+    CATALOG_MIGRATIONS,
+    CATEGORY_TABLE_NAME,
+    SqliteCatalogAuditRepository,
+    SqliteCategoryRepository,
+    applied_catalog_versions,
+    apply_catalog_migrations,
+    open_category_database,
+)
+from .global_paths import (
+    CATALOG_DB_FILENAME,
+    CATEGORIES_FOLDER,
+    GLOBAL_APP_FOLDER,
+    LOCALAPPDATA_ENV_VAR,
+    LocalAppDataGlobalPaths,
+)
+from .category_spec import FilesystemCategorySpecReader
 from .cost import SqliteCostPlugin
 from .deepseek import (
     DEEPSEEK_API_KEY_ENV_VAR,
@@ -366,4 +385,22 @@ __all__ = [
     "DEFAULT_DELIBERATION_TEMPERATURE",
     "profile_for",
     "resolve_deliberation_model",
+    # the global category catalog SQLite adapter (Step 2; its own database)
+    "CATALOG_MIGRATIONS",
+    "CATALOG_BOOTSTRAP_SQL",
+    "CATEGORY_TABLE_NAME",
+    "CATALOG_AUDIT_TABLE_NAME",
+    "open_category_database",
+    "apply_catalog_migrations",
+    "applied_catalog_versions",
+    "SqliteCategoryRepository",
+    "SqliteCatalogAuditRepository",
+    # the one global-path resolver (%LOCALAPPDATA%, fail closed)
+    "LocalAppDataGlobalPaths",
+    "LOCALAPPDATA_ENV_VAR",
+    "GLOBAL_APP_FOLDER",
+    "CATALOG_DB_FILENAME",
+    "CATEGORIES_FOLDER",
+    # the filesystem category SPEC reader (Step 3; read-only, never writes)
+    "FilesystemCategorySpecReader",
 ]

@@ -79,6 +79,7 @@ class TestDefaults:
             "claude",
             "grok",
             "deepseek",
+            "gemini",
             "disabled",
         )
 
@@ -278,7 +279,7 @@ class TestSecretSafety:
 
     def test_an_unknown_provider_is_refused(self) -> None:
         with pytest.raises(ValueError):
-            ProviderSelection(provider="gemini")
+            ProviderSelection(provider="unsupported-provider")
 
     def test_settings_are_immutable_value_objects(self) -> None:
         settings = default_provider_settings()

@@ -752,10 +752,16 @@ class TestSourceTreeUntouched:
         # and the offline scripted supervisor), the provider-settings step
         # exactly four - the per-advisor provider configuration, the
         # composition-level advisor factory, the DeepSeek advisor adapter and the
-        # disabled advisor - and Step 29 exactly two: the controlled architecture
-        # deliberation and the provider-backed architect/chair adapters. Nothing
-        # else has entered the scanned tree.
-        assert len(modules) == 71
+        # disabled advisor - Step 29 exactly two: the controlled architecture
+        # deliberation and the provider-backed architect/chair adapters - and the
+        # universalization's Step 2 exactly seven: the global-path port and its
+        # %LOCALAPPDATA% resolver, the category domain model, the catalog ports,
+        # the audited catalog use-case, the catalog's own SQLite adapter and its
+        # composition wiring - and Step 3 exactly three: the category SPEC domain
+        # module (the document format, the canonical hash and the validation), the
+        # read-only SPEC port and its filesystem reader. Nothing else has entered
+        # the scanned tree.
+        assert len(modules) == 81
 
     def test_the_crash_driver_is_not_an_architecture_module(self) -> None:
         assert CHILD.parent.name == "tests"

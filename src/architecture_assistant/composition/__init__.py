@@ -77,6 +77,7 @@ from .advisor_factory import (
     default_model_for,
     probe_connection,
     probe_deliberation,
+    probe_gemini_details,
     provider_catalog,
 )
 from .provider_settings import (
@@ -100,6 +101,40 @@ from .provider_settings import (
     save_provider_settings,
     settings_from_mapping,
 )
+from ..application.category_catalog import (
+    CategoryActorRequiredError,
+    CategoryCatalogError,
+    CategoryExistsError,
+    CategoryInvalidIdError,
+    CategoryMetadataError,
+    CategoryNameConflictError,
+    CategoryNotFoundError,
+    CategoryNotReadyError,
+    CategoryReasonRequiredError,
+)
+from ..domain.category import (
+    CatalogAuditAction,
+    CatalogAuditEntry,
+    Category,
+    CategorySelection,
+    CategoryState,
+    CategoryView,
+)
+from ..domain.category_spec import (
+    CategorySpec,
+    CategorySpecError,
+    CategorySpecHashMismatchError,
+    CategorySpecIdentityError,
+    CategorySpecMalformedError,
+    compute_spec_hash,
+)
+from ..ports.category_spec import (
+    CategorySpecNotFoundError,
+    CategorySpecPathError,
+    CategorySpecUnreadableError,
+)
+from .category_catalog import CategoryCatalog, open_category_catalog
+from ..ports.global_paths import GlobalPathsError
 
 __all__ = [
     "SETTINGS_KEYS",
@@ -166,6 +201,7 @@ __all__ = [
     "create_deliberation_agent",
     "create_deliberation_lead",
     "probe_deliberation",
+    "probe_gemini_details",
     # per-advisor provider settings (which provider/model/key each slot uses)
     "ADVISOR_KEYS",
     "DEFAULT_PROVIDER_BY_ADVISOR",
@@ -185,4 +221,33 @@ __all__ = [
     "load_provider_settings",
     "save_provider_settings",
     "settings_from_mapping",
+    # the global category catalog (Step 2; exists before any project database)
+    "open_category_catalog",
+    "CategoryCatalog",
+    "Category",
+    "CategoryView",
+    "CategoryState",
+    "CategorySelection",
+    "CatalogAuditAction",
+    "CatalogAuditEntry",
+    "CategoryCatalogError",
+    "CategoryNotFoundError",
+    "CategoryInvalidIdError",
+    "CategoryExistsError",
+    "CategoryNotReadyError",
+    "CategoryActorRequiredError",
+    "CategoryReasonRequiredError",
+    "CategoryMetadataError",
+    "CategoryNameConflictError",
+    "GlobalPathsError",
+    # the mandatory per-category SPEC.md (Step 3; format, hash, validation)
+    "CategorySpec",
+    "CategorySpecError",
+    "CategorySpecMalformedError",
+    "CategorySpecHashMismatchError",
+    "CategorySpecIdentityError",
+    "CategorySpecNotFoundError",
+    "CategorySpecUnreadableError",
+    "CategorySpecPathError",
+    "compute_spec_hash",
 ]

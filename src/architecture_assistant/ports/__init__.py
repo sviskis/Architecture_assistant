@@ -46,6 +46,18 @@ from .repositories import (
     TaskKey,
     TaskRepository,
 )
+from .catalog import (
+    CatalogAuditRepository,
+    CategoryCatalogPort,
+    CategoryRepository,
+)
+from .category_spec import (
+    CategorySpecNotFoundError,
+    CategorySpecPathError,
+    CategorySpecPort,
+    CategorySpecUnreadableError,
+)
+from .global_paths import GlobalPathsError, GlobalPathsPort
 from .storage import StoragePort
 from .transactions import TransactionPort
 
@@ -91,4 +103,15 @@ __all__ = [
     "CostIdentityConflictError",
     "CostIdentityUnavailableError",
     "Notification",
+    # the global category catalog (Step 2)
+    "GlobalPathsError",
+    "GlobalPathsPort",
+    "CategoryRepository",
+    "CatalogAuditRepository",
+    "CategoryCatalogPort",
+    # the read-only category SPEC reader (Step 3)
+    "CategorySpecPort",
+    "CategorySpecNotFoundError",
+    "CategorySpecUnreadableError",
+    "CategorySpecPathError",
 ]

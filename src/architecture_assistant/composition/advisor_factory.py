@@ -55,6 +55,7 @@ from ..infrastructure import (
     GrokAdvisorAdapter,
     OpenAIAdvisorAdapter,
 )
+from ..infrastructure.gemini import DEFAULT_GEMINI_MODEL, GeminiAdvisorAdapter
 from ..ports.capabilities import (
     SLOT_AGENT_A,
     SLOT_AGENT_B,
@@ -92,6 +93,7 @@ PROVIDER_DEFAULT_MODELS: dict[str, str] = {
     "claude": DEFAULT_CLAUDE_MODEL,
     "grok": DEFAULT_GROK_MODEL,
     "deepseek": DEFAULT_DEEPSEEK_MODEL,
+    "gemini": DEFAULT_GEMINI_MODEL,
     "disabled": "",
 }
 
@@ -154,6 +156,8 @@ class AdvisorFactory:
             return GrokAdvisorAdapter(key, model=model or None, **shared)
         if token == "deepseek":
             return DeepSeekAdvisorAdapter(key, model=model or None, **shared)
+        if token == "gemini":
+            return GeminiAdvisorAdapter(key, model=model or None, **shared)
         if token == "disabled":
             return DisabledAdvisorAdapter()
         raise ValueError(
@@ -416,3 +420,16 @@ def probe_deliberation(
     except ValueError:
         return ConnectionStatus.PROVIDER_ERROR.value
 
+
+
+def probe_gemini_details(model="", credential=None, *, deliberation=True, transport=None):
+    """Return the verdict and HTTP code, never provider bodies or credentials."""
+    from ..infrastructure._http import urllib_transport
+    observed = {}
+    def observe(request):
+        response = (transport or urllib_transport)(request)
+        observed["http_status"] = response.status_code
+        return response
+    probe = probe_deliberation if deliberation else probe_connection
+    status = probe("gemini", model, credential, transport=observe)
+    return {"status": status, **observed}

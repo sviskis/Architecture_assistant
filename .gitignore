@@ -10,3 +10,10 @@ data/gui_layout.json
 
 .env
 *.db
+
+# worker-tandem execution channel: task/context/log SQLite databases, backups and
+# generated step artefacts - local orchestration state, never project content.
+.worker_tandem/
+
+# empty scratch file produced during local debugging, not project source
+fails.py

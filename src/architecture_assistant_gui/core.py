@@ -39,6 +39,7 @@ from architecture_assistant.composition import (
     ADVISOR_KEYS,
     SETTINGS_KEYS,
     probe_deliberation,
+    probe_gemini_details,
     EVENT_LEVEL_ERROR,
     EVENT_LEVEL_INFO,
     EVENT_LEVEL_WARN,
@@ -426,6 +427,12 @@ class CoreWorker:
         credential = api_key
         if not credential and advisor in SETTINGS_KEYS:
             credential = composition.provider_settings.selection(advisor).api_key
+        if str(provider).strip().lower() == "gemini":
+            return {
+                "advisor": str(advisor), "provider": "gemini",
+                **probe_gemini_details(str(model or ""), credential,
+                    deliberation=advisor in ("agent_a", "agent_b", "lead")),
+            }
         if advisor in ("agent_a", "agent_b", "lead"):
             status = probe_deliberation(str(provider), str(model or ""), credential)
         else:

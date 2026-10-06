@@ -39,6 +39,11 @@ ALLOWED_CORE_IMPORTS = frozenset(
     }
 )
 
+#: Third-party presentation libraries the panel is allowed to import. They are
+#: declared in ``pyproject.toml`` and are GUI dependencies (widgets), not core
+#: coupling - ``customtkinter`` is the panel's own toolkit.
+GUI_THIRD_PARTY_IMPORTS = frozenset({"customtkinter", "PIL"})
+
 #: Source fragments that would mean a database handle or a repository write.
 #: Deliberately narrow: ``.append(`` alone would also match a UI log deque, and
 #: the rule is about *state* writes, not about local lists.
@@ -98,7 +103,11 @@ class TestDependencyDirection:
         for path, text in _gui_sources().items():
             for module in _imported_roots(text):
                 root = module.split(".")[0]
-                if root in sys.stdlib_module_names or root == GUI_PACKAGE:
+                if (
+                    root in sys.stdlib_module_names
+                    or root in GUI_THIRD_PARTY_IMPORTS
+                    or root == GUI_PACKAGE
+                ):
                     continue
                 assert root == "architecture_assistant", (path, module)
                 assert module in allowed_core, (path, module)
@@ -143,7 +152,7 @@ class TestDependencyDirection:
         assert result.is_compliant is True
         assert result.violations == ()
         assert result.baseline_version == ARCHITECTURE_CURRENT.version
-        # The frozen core: 71 modules (Step 25 added the plan loader, Step 26 the
+        # The frozen core: 78 modules (Step 25 added the plan loader, Step 26 the
         # advisory architecture review, Step 27 the log-event contract and the
         # managed-project proposal pair, Step 28 the advisory supervision quartet:
         # the policy, the use-case with its gate, the headless runtime and the
@@ -151,9 +160,15 @@ class TestDependencyDirection:
         # per-advisor provider configuration, its composition-level advisor
         # factory, the DeepSeek advisor adapter and the disabled advisor; Step 29
         # added the controlled architecture deliberation and its provider-backed
-        # architect/chair adapters),
+        # architect/chair adapters; Step 2 of the universalization added exactly
+        # seven - the global-path port and its %LOCALAPPDATA% resolver, the
+        # category domain model, the catalog ports, the audited catalog use-case,
+        # the catalog's own SQLite adapter and its composition wiring - and
+        # Step 3 exactly three: the category SPEC domain module (the document
+        # format, the canonical hash and the validation), the read-only SPEC port
+        # and its filesystem reader),
         # three rules, baseline 1.1.
-        assert len(source.modules()) == 71
+        assert len(source.modules()) == 82  # Gemini provider adapter
         assert len(ArchitectureValidator().baseline.rules) == 3
 
 
@@ -224,6 +239,14 @@ class TestNoWritePath:
             "test_connection_1",
             "test_connection_2",
             "test_connection_3",
+            # the plan-draft button and the manual provider-probe buttons the
+            # panel gained with the v1.1 GUI work (all non-mutating; documented
+            # in Arhitect_goal/INTENT_MAP.md). This set was stale at HEAD, so it
+            # is corrected here as test maintenance only.
+            "prepare_execution_plan",
+            "test_agent_a",
+            "test_agent_b",
+            "test_lead",
             # the deliberation workbench's own controls (Step 29): each one runs
             # one stage of the advisory board through the core, and none of them
             # can approve a proposal, reach VERIFIED or start a Cline task

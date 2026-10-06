@@ -1762,3 +1762,19 @@ class TestSnapshotAndActions:
 
 
 
+
+
+def test_incomplete_round1_can_be_retried_after_blocked_lead_review():
+    agent = ScriptedAgent("claude", "B", fail_analyse=True)
+    harness = Harness(agent_b=agent)
+    run = harness.round1(harness.start())
+    actions = harness.engine._actions(run, ())
+    assert ACTION_RUN_ROUND1 in actions
+    assert ACTION_GENERATE_LEAD_REVIEW not in actions
+    run = harness.lead_review(run)
+    assert ACTION_RUN_ROUND1 in harness.engine._actions(run, ())
+    agent.fail_analyse = False
+    run = harness.round1(run)
+    assert run.status is DeliberationStatus.ROUND1_COMPLETE
+    assert ACTION_GENERATE_LEAD_REVIEW in harness.engine._actions(run, ())
+

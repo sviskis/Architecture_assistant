@@ -1351,6 +1351,7 @@ class ArchitectureDeliberation:
                 DeliberationStatus.ERROR,
                 DeliberationStatus.CANCELLED,
                 DeliberationStatus.ROUND1_RUNNING,
+                DeliberationStatus.ROUND1_COMPLETE,
             ),
             "round 1",
         )
@@ -2951,6 +2952,18 @@ class ArchitectureDeliberation:
 
         status = run.status
         actions: list[str] = []
+        round1_answers = (
+            artifact_of(DeliberationStage.AGENT_A_ROUND1, SLOT_AGENT_A),
+            artifact_of(DeliberationStage.AGENT_B_ROUND1, SLOT_AGENT_B),
+        )
+        missing_peer = any(answer is None or not answer.is_usable for answer in round1_answers)
+        if missing_peer and status in (
+            DeliberationStatus.ERROR, DeliberationStatus.CANCELLED,
+            DeliberationStatus.ROUND1_COMPLETE,
+        ):
+            return (ACTION_RUN_ROUND1,) + (
+                (ACTION_CANCEL,) if status is not DeliberationStatus.CANCELLED else ()
+            )
         stage_action = {
             DeliberationStatus.DRAFT: ACTION_RUN_ROUND1,
             DeliberationStatus.ROUND1_RUNNING: ACTION_RUN_ROUND1,
