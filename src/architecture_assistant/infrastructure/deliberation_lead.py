@@ -827,6 +827,8 @@ class DeliberationLeadAdapter(_DeliberationClient):
                 "agent_a": dict(query.agent_a),
                 "agent_b": dict(query.agent_b),
                 "context": dict(query.context),
+                "user_consultation_notes": list(query.handed_over_texts),
+
             },
             schema=_LEAD_REVIEW_KEYS,
         )
@@ -845,6 +847,8 @@ class DeliberationLeadAdapter(_DeliberationClient):
                 "agent_b_round_1": dict(query.agent_b_round1),
                 "your_review": dict(query.lead_review),
                 "agent_a_round_2": dict(query.agent_a_round2),
+                "user_consultation_notes": list(query.handed_over_texts),
+
                 "agent_b_round_2": dict(query.agent_b_round2),
                 "context": dict(query.context),
             },

@@ -59,13 +59,15 @@ from __future__ import annotations
 import json
 import os
 import time
-from datetime import datetime
-from typing import Any, Callable, Mapping, Optional, Sequence
+import uuid
 
-from ..domain.enums import Severity
+from ..domain.enums import ChatRole, Severity
 from ..domain.models import Finding, utc_now
 from ..ports.capabilities import (
     AdvisorQuery,
+    ChatMessage,
+    ChatPort,
+    ChatUsage,
     ConnectionStatus,
     CostPort,
     CostRecord,
@@ -862,9 +864,148 @@ class ClaudeAdvisorAdapter:
         for value in (sent, received):
             if isinstance(value, bool) or not isinstance(value, int):
                 return None
-            if value < 0:
-                return None
-        return int(sent), int(received)
+
+
+
+class ClaudeChatAdapter(ChatPort):
+    """Claude adapter for interactive chat."""
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "",
+        *,
+        project: str = "",
+        cost_sink: Optional[CostPort] = None,
+        clock: Callable[[], datetime] = utc_now,
+        sleep: Callable[[float], None] = time.sleep,
+        transport: Optional[Callable[[HttpRequest], HttpResponse]] = None,
+        pricing: Mapping[str, ModelPrice] = CLAUDE_PRICES,
+        on_telemetry_error: Optional[Callable[[Exception], None]] = None,
+    ) -> None:
+        self._api_key = _text(api_key, "api_key")
+        self._model = model or DEFAULT_CLAUDE_MODEL
+        self._project = project
+        self._cost_sink = cost_sink
+        self._clock = clock
+        self._sleep = sleep
+        self._transport = transport or urllib_transport
+        self._pricing = pricing
+        self._on_telemetry_error = on_telemetry_error
+        self._last_telemetry_error: Optional[Exception] = None
+
+    def ask(
+        self,
+        session_id: str,
+        history: Sequence[ChatMessage],
+        question: str,
+    ) -> tuple[ChatMessage, ChatUsage]:
+        """Send a question with history to Claude."""
+        messages = []
+        for msg in history:
+            messages.append({"role": _enum_value(msg.role), "content": msg.text})
+        messages.append({"role": "user", "content": _text(question, "question")})
+
+        payload = {
+            "model": self._model,
+            "max_tokens": 4096,
+            "messages": messages,
+        }
+
+        request = HttpRequest(
+            url="https://api.anthropic.com/v1/messages",
+            method="POST",
+            headers={
+                "x-api-key": self._api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            body=json.dumps(payload).encode("utf-8"),
+        )
+
+        response = self._call_with_retry(request)
+        envelope = json.loads(response.body.decode("utf-8"))
+
+        content = envelope.get("content", [])
+        if not content or content[0].get("type") != "text":
+            raise ValueError(f"Claude returned no text content: {envelope}")
+
+        answer_text = content[0]["text"]
+        
+        usage_data = self._usage_of(envelope)
+        input_tokens, output_tokens = usage_data if usage_data else (0, 0)
+        
+        price = self._price_for(self._model)
+        cost = price.cost(input_tokens, output_tokens)
+
+        # Record cost if possible
+        if self._cost_sink and usage_data:
+            try:
+                self._cost_sink.record(
+                    CostRecord(
+                        provider=CLAUDE_PROVIDER,
+                        event_id=_cost_event_id(CLAUDE_PROVIDER, envelope),
+                        model=self._model,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        cost_usd=cost,
+                        pricing_known=self._model in self._pricing,
+                        project=self._project,
+                        created_at=self._clock(),
+                    )
+                )
+            except Exception as error:
+                self._last_telemetry_error = error
+
+        return (
+            ChatMessage(
+                id=str(uuid.uuid4()),
+                role=ChatRole.ASSISTANT,
+                text=answer_text,
+                created_at=self._clock(),
+            ),
+            ChatUsage(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost,
+                model=self._model,
+            ),
+        )
+
+    def _call_with_retry(self, request: HttpRequest) -> HttpResponse:
+        """Shared retry logic (simplified version of Advisor's logic)."""
+        last_error: Optional[Exception] = None
+        for attempt, delay in enumerate(DEFAULT_BACKOFF_SCHEDULE):
+            if attempt > 0:
+                self._sleep(delay)
+            try:
+                response = self._transport(request)
+                if response.status_code == 200:
+                    return response
+                
+                # Retry on 429 and 5xx
+                if response.status_code != HTTP_TOO_MANY_REQUESTS and response.status_code < 500:
+                    # Redact and raise
+                    body = response.body.decode("utf-8", errors="replace")
+                    redacted = body.replace(self._api_key, "***")
+                    raise ValueError(f"Claude API error {response.status_code}: {redacted}")
+                
+            except Exception as error:
+                last_error = error
+                if attempt == len(DEFAULT_BACKOFF_SCHEDULE) - 1:
+                    raise last_error from None
+        
+        raise last_error or RuntimeError("Retry loop exhausted without error")
+
+    def _usage_of(self, envelope: Mapping[str, Any]) -> Optional[tuple[int, int]]:
+        usage = envelope.get("usage")
+        if not isinstance(usage, Mapping):
+            return None
+        sent = usage.get("input_tokens")
+        received = usage.get("output_tokens")
+        if not isinstance(sent, int) or not isinstance(received, int):
+            return None
+        return sent, received
 
     def _price_for(self, model: str) -> ModelPrice:
         """The injected price, or the documented unknown-price fallback."""

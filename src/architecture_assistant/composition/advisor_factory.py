@@ -43,6 +43,8 @@ from typing import Any, Callable, Mapping, Optional
 from ..application import AdvisorReviewer, DeliberationChair, DeliberationSeat
 from ..domain.models import utc_now
 from ..infrastructure import (
+    ClaudeChatAdapter,
+
     DEFAULT_CLAUDE_MODEL,
     DEFAULT_DEEPSEEK_MODEL,
     DEFAULT_GROK_MODEL,
@@ -59,6 +61,8 @@ from ..infrastructure.gemini import DEFAULT_GEMINI_MODEL, GeminiAdvisorAdapter
 from ..ports.capabilities import (
     SLOT_AGENT_A,
     SLOT_AGENT_B,
+    ChatPort,
+
     AdvisorPort,
     ConnectionStatus,
     CostPort,
@@ -84,6 +88,7 @@ __all__ = [
     "create_deliberation_lead",
     "assemble_deliberation",
     "probe_deliberation",
+    "create_chat_adapter",
 ]
 
 #: Each provider's documented default model - the same constants the adapters
@@ -338,6 +343,32 @@ def create_deliberation_lead(
         clock=clock,
         transport=transport,
     )
+
+
+def create_chat_adapter(
+    provider: str,
+    model: str = "",
+    credential: Optional[str] = None,
+    *,
+    project: str = "",
+    cost_sink: Optional[CostPort] = None,
+    clock: Callable[[], datetime] = utc_now,
+    transport: Optional[Callable[[Any], Any]] = None,
+) -> Optional[ChatPort]:
+    """Create a chat adapter for the given provider; None if not supported."""
+    if not credential:
+        return None
+    p = str(provider).strip().casefold()
+    if p == "claude":
+        return ClaudeChatAdapter(
+            api_key=credential,
+            model=model,
+            project=project,
+            cost_sink=cost_sink,
+            clock=clock,
+            transport=transport,
+        )
+    return None
 
 
 def assemble_deliberation(

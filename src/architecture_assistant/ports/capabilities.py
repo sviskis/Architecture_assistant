@@ -17,6 +17,7 @@ from enum import Enum, StrEnum
 from typing import Any, Mapping, Optional, Protocol, runtime_checkable
 
 from ..domain.enums import (
+    ChatRole,
     ReportStatus,
     Severity,
     SupervisorAction,
@@ -70,6 +71,8 @@ __all__ = [
     "DeliberationLeadPort",
     "MAX_SUPERVISOR_ITEMS",
     "MAX_SUPERVISOR_TEXT",
+    "ChatUsage",
+    "ChatPort",
     "SupervisorContext",
     "SupervisorResult",
     "SupervisorPort",
@@ -1549,6 +1552,8 @@ class LeadReviewQuery:
 
     project: str
     requirement: str
+    handed_over_texts: tuple[str, ...] = ()
+
     deliberation_id: str
     agent_a: Mapping[str, Any] = field(default_factory=dict)
     agent_b: Mapping[str, Any] = field(default_factory=dict)
@@ -1563,6 +1568,12 @@ class LeadReviewQuery:
             object.__setattr__(
                 self, name, _bounded_deliberation(getattr(self, name), name)
             )
+        object.__setattr__(
+            self,
+            "handed_over_texts",
+            _bounded_text_list(self.handed_over_texts, "handed_over_texts"),
+        )
+
 
     def to_dict(self) -> dict[str, Any]:
         """Deterministic, JSON-safe representation."""
@@ -1572,6 +1583,8 @@ class LeadReviewQuery:
             "deliberation_id": self.deliberation_id,
             "agent_a": dict(self.agent_a),
             "agent_b": dict(self.agent_b),
+            "handed_over_texts": list(self.handed_over_texts),
+
             "context": dict(self.context),
         }
 
@@ -1616,6 +1629,8 @@ class LeadSynthesisQuery:
     project: str
     requirement: str
     deliberation_id: str
+    handed_over_texts: tuple[str, ...] = ()
+
     agent_a_round1: Mapping[str, Any] = field(default_factory=dict)
     agent_b_round1: Mapping[str, Any] = field(default_factory=dict)
     lead_review: Mapping[str, Any] = field(default_factory=dict)
@@ -1639,6 +1654,12 @@ class LeadSynthesisQuery:
             object.__setattr__(
                 self, name, _bounded_deliberation(getattr(self, name), name)
             )
+        object.__setattr__(
+            self,
+            "handed_over_texts",
+            _bounded_text_list(self.handed_over_texts, "handed_over_texts"),
+        )
+
 
     def to_dict(self) -> dict[str, Any]:
         """Deterministic, JSON-safe representation."""
@@ -1652,6 +1673,8 @@ class LeadSynthesisQuery:
             "agent_a_round2": dict(self.agent_a_round2),
             "agent_b_round2": dict(self.agent_b_round2),
             "context": dict(self.context),
+            "handed_over_texts": list(self.handed_over_texts),
+
         }
 
 
@@ -1695,6 +1718,50 @@ class DeliberationLeadPort(Protocol):
     * reason over the structured conclusions it is handed and **never vote**:
       there is no majority rule, no provider ranking and no weight here;
     * preserve a disagreement that remains instead of claiming a consensus that
+      does not exist;
+    * answer with structured, JSON-safe content only - a malformed answer is a
+      failure, never a synthesis;
+    * never mutate anything: it has no storage, no transaction boundary, no FSM
+      and no approval authority, and it can never reach ``VERIFIED``.
+    """
+
+
+
+@dataclass(frozen=True)
+class ChatUsage:
+    """Token usage and cost for a chat turn."""
+
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float = 0.0
+    model: str = ""
+
+
+@runtime_checkable
+class ChatPort(Protocol):
+    """Contract for a provider-neutral interactive chat capability."""
+
+    def ask(
+        self,
+        session_id: str,
+        history: Sequence[ChatMessage],
+        question: str,
+    ) -> tuple[ChatMessage, ChatUsage]:
+        """Send a question with history and receive the response and usage."""
+        ...
+
+
+@runtime_checkable
+class DeliberationLeadPort(Protocol):
+    """Contract for the chair of the architecture review board.
+
+    The chair reason over evidence from multiple independent perspectives and
+    produces a single, consistent design proposal.
+
+    Strict rules:
+    * never call an architect agent - it receives their proposals as input;
+    * never open a database or a file - every input must travel in the query;
+    * never invent a peer perspective - if an agent failed, that seat's input
       does not exist;
     * answer with structured, JSON-safe content only - a malformed answer is a
       failure, never a synthesis;

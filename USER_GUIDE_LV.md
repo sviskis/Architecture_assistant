@@ -4,7 +4,8 @@
 
 1. Atver **New / Open Project** un izvēlies projekta mapi. Katram projektam tiek izveidota sava `.architecture_assistant` mape ar datubāzi, aģentu iestatījumiem, Cline apmaiņas failiem un pārskatiem.
 2. Sadaļā **Project brief** ieraksti mērķi, esošo situāciju, ierobežojumus un gatavības kritērijus.
-3. Sadaļā **Agent settings** izvēlies Architect A, Lead architect un Architect B nodrošinātājus, modeļus un API atslēgas. `Test Connection` pārbauda konkrēto vietu; `Save team settings` saglabā visu komandu.
+3. (Neobligāti) Sadaļā **Consultation (Claude)** uzdod jautājumus par arhitektūru, riskiem vai tehnoloģiju izvēli. Izmanto pogu `Nodot galvenajam aģentam`, lai svarīgas atziņas pievienotu diskusijas kontekstam.
+4. Sadaļā **Agent settings** izvēlies Architect A, Lead architect un Architect B nodrošinātājus, modeļus un API atslēgas. `Test Connection` pārbauda konkrēto vietu; `Save team settings` saglabā visu komandu.
 4. Sadaļā **Discussion** izpildi posmus secīgi: Round 1, Lead Review, Round 2, Final Synthesis un Generate Architecture Proposal.
 5. Sadaļā **Architecture** izlasi cilvēkam lasāmo dokumentu. Apstiprini to, pieprasi labojumu vai noraidi.
 6. Pēc apstiprināšanas spied **Create Execution Plan**. Izlasi un, ja nepieciešams, rediģē JSON melnrakstu, tad spied **Validate & Import**.
@@ -40,6 +41,13 @@
 - **Generate Final Synthesis** — Lead izveido vienotu gala arhitektūru.
 - **Generate Architecture Proposal** — saglabā sintēzi kā pārskatāmu DRAFT priekšlikumu.
 - **Cancel Deliberation** — pārtrauc konkrēto diskusiju, saglabājot tās vēsturi.
+
+### Consultation (Claude)
+
+- **Send** — nosūta jautājumu Claude, saglabājot sarunas vēsturi. Tas palīdz izprast riskus vai labāk definēt prasības.
+- **New conversation** — sāk jaunu tukšu sarunu.
+- **Nodot galvenajam aģentam** — pēdējo Claude atbildi saglabā kā nodošanas ierakstu. Šie teksti tiek iekļauti Lead architect kontekstā, kad tiek veikta pilnā diskusija (Discussion).
+
 
 ### Architecture
 

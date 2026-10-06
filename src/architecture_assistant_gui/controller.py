@@ -43,6 +43,9 @@ from architecture_assistant.composition import (
 __all__ = [
     "ABORT_STATES",
     "APPROVAL_STATES",
+    "CHAT_ASK_INTENT",
+    "CHAT_HANDOVER_INTENT",
+    "CHAT_NEW_INTENT",
     "CLEAR_LOGS_INTENT",
     "CONNECTION_INTENT_KEYS",
     "CONNECTION_SLOT_BY_INTENT",
@@ -80,6 +83,12 @@ __all__ = [
     "GuiController",
     "Intent",
 ]
+#: Intent keys for the Claude chat.
+CHAT_ASK_INTENT = "chat_ask"
+CHAT_NEW_INTENT = "chat_new"
+CHAT_HANDOVER_INTENT = "chat_handover"
+
+
 
 #: How many log entries the GUI keeps for its read-only Logs view.
 LOG_LIMIT = 200
@@ -486,10 +495,20 @@ INTENTS: tuple[Intent, ...] = (
     Intent(
         key="deliberation_cancel",
         label="Cancel Deliberation",
-        group=DELIBERATION_INTENT_GROUP,
+        group="Discussion",
         mutating=True,
         human=True,
         reason_prompt="Why is this deliberation being cancelled?",
+    ),
+    Intent(key=CHAT_ASK_INTENT, label="Sūtīt", group="Chat", mutating=False),
+    Intent(key=CHAT_NEW_INTENT, label="Jauna saruna", group="Chat", mutating=False),
+    Intent(
+        key=CHAT_HANDOVER_INTENT,
+        label="Nodot galvenajam aģentam",
+        group="Chat",
+        mutating=False,
+        human=True,
+        reason_prompt="Kāpēc šī atbilde ir svarīga arhitektūrai?",
     ),
     # The provider-settings header lives *inside* each advisor pane, so these
     # actions are grouped under a name the Actions panel does not render: the
@@ -859,6 +878,15 @@ class GuiController:
         self._proposal: Optional[dict[str, Any]] = None
         self._proposal_requirement = ""
         self._revision_feedback = ""
+        #: The Claude Chat tab: session id, message history (plain data)
+        #: and the operator input.
+        self._chat_session_id: Optional[str] = None
+        self._chat_history: list[dict[str, Any]] = []
+        self._chat_input = ""
+        self._selected_message_id: Optional[str] = None
+        self._handovers: list[dict[str, Any]] = []
+
+        self._revision_feedback = ""
         #: The Supervisor tab: the runtime/supervision plain payload and the one
         #: operator input the tab collects - an editable instruction that is sent
         #: with the approval. Never a core object, never a second source of truth.
@@ -1104,6 +1132,12 @@ class GuiController:
             )
         if intent.key == "refresh":
             return self._read_action()
+        if intent.key == CHAT_ASK_INTENT:
+            return self._chat_ask_action()
+        if intent.key == CHAT_NEW_INTENT:
+            return self._chat_new_action()
+        if intent.key == CHAT_HANDOVER_INTENT:
+            return self._chat_handover_action(reason)
         if intent.key == "reconnect":
             return self._reconnect_action()
         if intent.key in ("export_markdown", "export_excel"):
@@ -2816,6 +2850,10 @@ class GuiController:
         if label == "open":
             self.log("Core ready.")
             return
+        if result.label in (CHAT_ASK_INTENT, CHAT_NEW_INTENT):
+            self.handle_chat_result(data)
+        if "handovers" in data:
+            self._handovers = data["handovers"]
         payload = getattr(result, "payload", None)
         if not isinstance(payload, Mapping):
             self.log(f"{label} finished.")
@@ -4283,8 +4321,102 @@ class GuiController:
             "last_action": self._last_action,
             "stopped_because": self.stopped_because,
             "actor": self.actor,
+            "handovers": self._handovers,
             "reports_dir": self.reports_dir,
+            "chat_history": list(self._chat_history),
+            "chat_input": self._chat_input,
+            "selected_message_id": self._selected_message_id,
         }
+
+
+    # -- chat --------------------------------------------------------------
+
+    def chat_session_id(self) -> Optional[str]:
+        return self._chat_session_id
+
+    def chat_history(self) -> list[dict[str, Any]]:
+        return self._chat_history
+
+    def chat_input(self) -> str:
+        return self._chat_input
+
+    def set_chat_input(self, text: str) -> None:
+        self._chat_input = text
+
+    def set_selected_message_id(self, message_id: Optional[str]) -> None:
+        self._selected_message_id = message_id
+
+    def _chat_ask_action(self) -> Callable[[Any], dict[str, Any]]:
+        session_id = self._chat_session_id
+        question = self._chat_input
+        if not session_id:
+             # Create session if needed or raise error
+             raise ValueError("No active chat session. Start a new conversation.")
+
+        def action(worker: Any) -> dict[str, Any]:
+            result = worker.chat_ask(session_id, question)
+            return {
+                **result,
+                "chat_history": worker.chat_history(session_id)["messages"],
+            }
+        return action
+
+    def _chat_new_action(self) -> Callable[[Any], dict[str, Any]]:
+        project = self.project_name()
+        # Find a Claude provider
+        claude_selection = None
+        for key in SETTINGS_KEYS:
+            selection = self.provider_settings().selection(key)
+            if selection.provider == "claude" and selection.api_key:
+                claude_selection = selection
+                break
+
+        if not claude_selection:
+            provider, model = "claude", "claude-3-5-sonnet-20240620"
+        else:
+            provider, model = claude_selection.provider, claude_selection.model
+
+        def action(worker: Any) -> dict[str, Any]:
+            new_session = worker.chat_new(project, "chat", provider, model)
+            session_id = new_session["session"]["id"]
+            return {
+                **new_session,
+                "chat_history": worker.chat_history(session_id)["messages"],
+            }
+        return action
+
+    def _chat_handover_action(self, reason: str = "") -> Callable[[Any], dict[str, Any]]:
+        session_id = self._chat_session_id
+        message_id = self._selected_message_id
+        actor = str(self.actor).strip()
+
+        if not message_id:
+            # Fallback to last assistant message if none selected
+            for msg in reversed(self._chat_history):
+                if msg.get("role") == "assistant":
+                    message_id = msg.get("id")
+                    break
+
+        if not message_id:
+            raise ValueError("No assistant message to hand over.")
+
+        def action(worker: Any) -> dict[str, Any]:
+            res = worker.chat_handover(session_id, message_id, actor, reason)
+            # After handover, refresh project handovers
+            return {
+                **res,
+                "handovers": worker.chat_handovers(self.project_name())["handovers"],
+            }
+        return action
+
+    def handle_chat_result(self, result: dict[str, Any]) -> None:
+        """Update chat state from a core result."""
+        if "session" in result:
+            self._chat_session_id = result["session"]["id"]
+        if "chat_history" in result:
+            self._chat_history = result["chat_history"]
+        if "answer" in result:
+            self._chat_input = ""  # Clear input on success
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:

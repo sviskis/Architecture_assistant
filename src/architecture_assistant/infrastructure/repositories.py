@@ -59,7 +59,10 @@ __all__ = [
     "SqliteFindingRepository",
     "SqliteDecisionRepository",
     "SqliteAuditRepository",
+    "SqliteChatRepository",
+    "SqliteHandoverRepository",
 ]
+
 
 
 # ---------------------------------------------------------------------------
@@ -1512,4 +1515,160 @@ class SqliteDeliberationRepository(_SqliteRepository):
             "DELETE FROM deliberation_runs WHERE deliberation_id = ?",
             (deliberation_id,),
         )
+
+
+def _row_to_chat_session(row: sqlite3.Row) -> ChatSession:
+    return ChatSession(
+        id=row["id"],
+        project=row["project"],
+        agent_slot=row["agent_slot"],
+        provider=row["provider"],
+        model=row["model"],
+        created_at=_parse_dt(row["created_at"]),
+    )
+
+
+def _row_to_chat_message(row: sqlite3.Row) -> ChatMessage:
+    return ChatMessage(
+        id=row["id"],
+        role=ChatRole(row["role"]),
+        text=row["text"],
+        created_at=_parse_dt(row["created_at"]),
+    )
+
+
+class SqliteChatRepository(_SqliteRepository):
+    """SQLite adapter for chat sessions and messages."""
+
+    _UPSERT_SESSION = """
+        INSERT INTO chat_sessions (id, project, agent_slot, provider, model, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            project = excluded.project,
+            agent_slot = excluded.agent_slot,
+            provider = excluded.provider,
+            model = excluded.model,
+            created_at = excluded.created_at
+    """
+
+    def upsert_session(self, session: ChatSession) -> None:
+        self._execute(
+            self._UPSERT_SESSION,
+            (
+                session.id,
+                session.project,
+                session.agent_slot,
+                session.provider,
+                session.model,
+                _iso(session.created_at),
+            ),
+        )
+
+    def get_session(self, session_id: str) -> Optional[ChatSession]:
+        return self._get(
+            "SELECT * FROM chat_sessions WHERE id = ?",
+            (session_id,),
+            _row_to_chat_session,
+        )
+
+    def list_sessions_for_project(self, project: str) -> tuple[ChatSession, ...]:
+        return self._list(
+            "SELECT * FROM chat_sessions WHERE project = ? ORDER BY created_at DESC",
+            (project,),
+            _row_to_chat_session,
+        )
+
+    def append_message(self, session_id: str, message: ChatMessage) -> None:
+        self._execute(
+            "INSERT INTO chat_messages (id, session_id, role, text, created_at) VALUES (?, ?, ?, ?, ?)",
+            (message.id, session_id, _enum_value(message.role), message.text, _iso(message.created_at)),
+        )
+
+    def list_messages(self, session_id: str) -> tuple[ChatMessage, ...]:
+        return self._list(
+            "SELECT * FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC",
+            (session_id,),
+            _row_to_chat_message,
+        )
+
+    def delete_message(self, session_id: str, message_id: str) -> bool:
+        cursor = self._execute(
+            "DELETE FROM chat_messages WHERE session_id = ? AND id = ?",
+            (session_id, message_id),
+        )
+        return cursor.rowcount > 0
+
+    def delete_session(self, session_id: str) -> bool:
+        # ON DELETE CASCADE handles chat_messages
+        cursor = self._execute("DELETE FROM chat_sessions WHERE id = ?", (session_id,))
+        return cursor.rowcount > 0
+
+
+def _row_to_handover_record(row: sqlite3.Row) -> HandoverRecord:
+    return HandoverRecord(
+        id=row["id"],
+        project=row["project"],
+        session_id=row["session_id"],
+        message_id=row["message_id"],
+        text=row["text"],
+        provider=row["provider"],
+        model=row["model"],
+        actor=row["actor"],
+        reason=row["reason"],
+        created_at=_parse_dt(row["created_at"]),
+    )
+
+
+class SqliteHandoverRepository(_SqliteRepository):
+    """SQLite adapter for handover records."""
+
+    _UPSERT = """
+        INSERT INTO handover_records (id, project, session_id, message_id, text, provider, model, actor, reason, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            project = excluded.project,
+            session_id = excluded.session_id,
+            message_id = excluded.message_id,
+            text = excluded.text,
+            provider = excluded.provider,
+            model = excluded.model,
+            actor = excluded.actor,
+            reason = excluded.reason,
+            created_at = excluded.created_at
+    """
+
+    def upsert(self, record: HandoverRecord) -> None:
+        self._execute(
+            self._UPSERT,
+            (
+                record.id,
+                record.project,
+                record.session_id,
+                record.message_id,
+                record.text,
+                record.provider,
+                record.model,
+                record.actor,
+                record.reason,
+                _iso(record.created_at),
+            ),
+        )
+
+    def get(self, record_id: str) -> Optional[HandoverRecord]:
+        return self._get(
+            "SELECT * FROM handover_records WHERE id = ?",
+            (record_id,),
+            _row_to_handover_record,
+        )
+
+    def list_for_project(self, project: str) -> tuple[HandoverRecord, ...]:
+        return self._list(
+            "SELECT * FROM handover_records WHERE project = ? ORDER BY created_at DESC",
+            (project,),
+            _row_to_handover_record,
+        )
+
+    def delete(self, record_id: str) -> bool:
+        cursor = self._execute("DELETE FROM handover_records WHERE id = ?", (record_id,))
+        return cursor.rowcount > 0
 

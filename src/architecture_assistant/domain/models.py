@@ -15,6 +15,7 @@ from typing import Any, ClassVar, Mapping, Optional
 from .enums import (
     ACRStatus,
     ADRStatus,
+    ChatRole,
     DELIBERATION_MAX_REVIEW_ROUNDS,
     SUPERVISION_ALLOWING_STATUSES,
     DecisionStatus,
@@ -49,6 +50,10 @@ __all__ = [
     "Risk",
     "Finding",
     "Decision",
+    "ChatMessage",
+    "ChatSession",
+    "HandoverRecord",
+
     "utc_now",
 ]
 
@@ -1094,6 +1099,83 @@ class Decision(DomainModel):
         object.__setattr__(
             self, "status", _coerce_enum(self.status, DecisionStatus, "status")
         )
+
+@dataclass(frozen=True)
+class ChatMessage(DomainModel):
+    """A single message in a provider-neutral chat conversation."""
+
+    id: str
+    role: ChatRole
+    text: str
+    created_at: datetime = field(default_factory=utc_now)
+
+    _ENUM_FIELDS: ClassVar[Mapping[str, type]] = {"role": ChatRole}
+    _DATETIME_FIELDS: ClassVar[tuple[str, ...]] = ("created_at",)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "id", _require_text(self.id, "id"))
+        object.__setattr__(self, "role", _coerce_enum(self.role, ChatRole, "role"))
+        object.__setattr__(self, "text", _require_text(self.text, "text"))
+        object.__setattr__(
+            self, "created_at", _require_datetime(self.created_at, "created_at")
+        )
+
+
+@dataclass(frozen=True)
+class ChatSession(DomainModel):
+    """A provider-neutral chat conversation session."""
+
+    id: str
+    project: str
+    agent_slot: str
+    provider: str
+    model: str
+    created_at: datetime = field(default_factory=utc_now)
+
+    _DATETIME_FIELDS: ClassVar[tuple[str, ...]] = ("created_at",)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "id", _require_text(self.id, "id"))
+        object.__setattr__(self, "project", _require_text(self.project, "project"))
+        object.__setattr__(self, "agent_slot", _require_text(self.agent_slot, "agent_slot"))
+        object.__setattr__(self, "provider", _require_text(self.provider, "provider"))
+        object.__setattr__(self, "model", _require_text(self.model, "model"))
+        object.__setattr__(
+            self, "created_at", _require_datetime(self.created_at, "created_at")
+        )
+
+
+@dataclass(frozen=True)
+class HandoverRecord(DomainModel):
+    """A record of a chat response being handed over to the lead agent."""
+
+    id: str
+    project: str
+    session_id: str
+    message_id: str
+    text: str
+    provider: str
+    model: str
+    actor: str = ""
+    reason: str = ""
+    created_at: datetime = field(default_factory=utc_now)
+
+    _DATETIME_FIELDS: ClassVar[tuple[str, ...]] = ("created_at",)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "id", _require_text(self.id, "id"))
+        object.__setattr__(self, "project", _require_text(self.project, "project"))
+        object.__setattr__(self, "session_id", _require_text(self.session_id, "session_id"))
+        object.__setattr__(self, "message_id", _require_text(self.message_id, "message_id"))
+        object.__setattr__(self, "text", _require_text(self.text, "text"))
+        object.__setattr__(self, "provider", _require_text(self.provider, "provider"))
+        object.__setattr__(self, "model", _require_text(self.model, "model"))
+        object.__setattr__(self, "actor", self.actor or "")
+        object.__setattr__(self, "reason", self.reason or "")
+        object.__setattr__(
+            self, "created_at", _require_datetime(self.created_at, "created_at")
+        )
+
         object.__setattr__(
             self, "rules_applied", _freeze_tuple(self.rules_applied, "rules_applied")
         )

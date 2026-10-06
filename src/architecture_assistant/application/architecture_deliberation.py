@@ -83,6 +83,8 @@ from ..domain.models import (
     DeliberationArtifact,
     DeliberationRun,
     utc_now,
+    HandoverRepository,
+
 )
 from ..ports.capabilities import (
     SLOT_AGENT_A,
@@ -913,6 +915,7 @@ class ArchitectureDeliberation:
         projects: ProjectRepository,
         audit: AuditRepository,
         transactions: TransactionPort,
+        handover_repo: HandoverRepository,
         *,
         agent_a: DeliberationSeat,
         agent_b: DeliberationSeat,
@@ -925,6 +928,7 @@ class ArchitectureDeliberation:
             ("projects", projects, "list"),
             ("audit", audit, "append"),
             ("transactions", transactions, "transaction"),
+            ("handovers", handover_repo, "list_for_project"),
         ):
             if not callable(getattr(port, method, None)):
                 raise ValueError(
@@ -943,6 +947,8 @@ class ArchitectureDeliberation:
         if not callable(clock):
             raise ValueError("clock must be a callable returning a datetime")
         self._deliberations = deliberations
+        self._handovers = handover_repo
+
         self._proposals = proposals
         self._projects = projects
         self._audit = audit
@@ -1944,6 +1950,10 @@ class ArchitectureDeliberation:
         A chair whose provider is not configured is refused **without any call**;
         every advisor result stays exactly as it was.
         """
+        # Retrieve user handovers (consultation notes)
+        handovers = self._handovers.list_for_project(run.project)
+        handed_over_texts = tuple(h.text for h in handovers)
+
         if not self._chair.enabled:
             content = {
                 "schema_version": DELIBERATION_SCHEMA_VERSION,
@@ -1966,9 +1976,10 @@ class ArchitectureDeliberation:
                     project=run.project,
                     requirement=run.requirement,
                     deliberation_id=run.deliberation_id,
-                    agent_a=dict(agent_a.content),
-                    agent_b=dict(agent_b.content),
-                    context=context,
+                    agent_a=dict(agent_a.content) if agent_a else {},
+                    agent_b=dict(agent_b.content) if agent_b else {},
+                    context=dict(context),
+                    handed_over_texts=handed_over_texts,
                 )
             )
         except Exception as error:  # noqa: BLE001 - a chair failure is recorded
@@ -2318,6 +2329,11 @@ class ArchitectureDeliberation:
         fingerprints = tuple(artifact.fingerprint for artifact in upstream)
         by_stage = {artifact.stage: artifact for artifact in upstream}
         evidence = self._disagreement_evidence(upstream)
+
+        # Retrieve user handovers (consultation notes)
+        handovers = self._handovers.list_for_project(run.project)
+        handed_over_texts = tuple(h.text for h in handovers)
+
         if not self._chair.enabled:
             content = {
                 "schema_version": DELIBERATION_SCHEMA_VERSION,
@@ -2342,20 +2358,31 @@ class ArchitectureDeliberation:
                     deliberation_id=run.deliberation_id,
                     agent_a_round1=dict(
                         by_stage[DeliberationStage.AGENT_A_ROUND1].content
-                    ),
+                    )
+                    if DeliberationStage.AGENT_A_ROUND1 in by_stage
+                    else {},
                     agent_b_round1=dict(
                         by_stage[DeliberationStage.AGENT_B_ROUND1].content
-                    ),
+                    )
+                    if DeliberationStage.AGENT_B_ROUND1 in by_stage
+                    else {},
                     lead_review=dict(
                         by_stage[DeliberationStage.LEAD_REVIEW].content
-                    ),
+                    )
+                    if DeliberationStage.LEAD_REVIEW in by_stage
+                    else {},
                     agent_a_round2=dict(
                         by_stage[DeliberationStage.AGENT_A_ROUND2].content
-                    ),
+                    )
+                    if DeliberationStage.AGENT_A_ROUND2 in by_stage
+                    else {},
                     agent_b_round2=dict(
                         by_stage[DeliberationStage.AGENT_B_ROUND2].content
-                    ),
-                    context=context,
+                    )
+                    if DeliberationStage.AGENT_B_ROUND2 in by_stage
+                    else {},
+                    context=dict(context),
+                    handed_over_texts=handed_over_texts,
                 )
             )
         except Exception as error:  # noqa: BLE001 - a chair failure is recorded

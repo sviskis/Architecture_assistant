@@ -25,6 +25,8 @@ from .claude import (
     DEFAULT_CLAUDE_MAX_OUTPUT_TOKENS,
     DEFAULT_CLAUDE_MODEL,
     ClaudeAdvisorAbstainError,
+    ClaudeChatAdapter,
+
     ClaudeAdvisorAdapter,
     ClaudeAdvisorError,
     ClaudeAdvisorHttpError,
@@ -300,6 +302,8 @@ __all__ = [
     "OPENAI_CHAT_COMPLETIONS_URL",
     "OPENAI_API_KEY_ENV_VAR",
     # Claude advisor adapter (Step 13)
+    "ClaudeChatAdapter",
+
     "ClaudeAdvisorAdapter",
     "ClaudeAdvisorError",
     "ClaudeMissingApiKeyError",

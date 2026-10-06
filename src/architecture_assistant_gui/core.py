@@ -298,6 +298,9 @@ class CoreWorker:
                 "report_dir": str(composition.config.report_dir),
                 "source_root": str(composition.config.source_root),
             },
+            "handovers": self.chat_handovers(canonical["project"]["name"])["handovers"],
+            "chat": self._chat_payload(canonical["project"]["name"]),
+
         }
 
     def channel_status(self) -> dict[str, Any]:
@@ -1208,6 +1211,62 @@ class CoreWorker:
         return record.supervision_id
 
 
+
+
+    # -- chat --------------------------------------------------------------
+
+    def chat_handovers(self, project: str) -> dict[str, Any]:
+        """List all handovers for the given project (plain data)."""
+        composition = self._core()
+        handovers = composition.storage.handovers.list_for_project(project)
+        return {"handovers": [h.to_dict() for h in handovers]}
+
+    def chat_ask(self, session_id: str, question: str) -> dict[str, Any]:
+        """Send a question to Claude and return the answer (plain data)."""
+        composition = self._core()
+        if not composition.chat_service._chat_port:
+             raise ValueError("No Claude chat provider configured. Check your settings.")
+        answer, usage = composition.chat_service.ask(session_id, question)
+        return {
+            "answer": answer.to_dict(),
+            "usage": {
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+                "cost_usd": usage.cost_usd,
+                "model": usage.model,
+            },
+        }
+
+    def chat_new(
+        self, project: str, agent_slot: str, provider: str, model: str
+    ) -> dict[str, Any]:
+        """Start a new chat session (plain data)."""
+        composition = self._core()
+        session = composition.chat_service.start_session(
+            project, agent_slot, provider, model
+        )
+        return {"session": session.to_dict()}
+
+    def chat_handover(self, session_id: str, message_idx: int) -> dict[str, Any]:
+        """Hand over one assistant response to the lead (plain data)."""
+        composition = self._core()
+        record = composition.chat_service.handover(session_id, message_idx)
+        return {"handover": record.to_dict()}
+
+    def chat_history(self, session_id: str) -> dict[str, Any]:
+        """Retrieve the full history of one session (plain data)."""
+        composition = self._core()
+        session, messages = composition.chat_service.get_history(session_id)
+        return {
+            "session": session.to_dict(),
+            "messages": [m.to_dict() for m in messages],
+        }
+
+    def chat_sessions(self, project: str) -> dict[str, Any]:
+        """List all chat sessions for the given project (plain data)."""
+        composition = self._core()
+        sessions = composition.storage.chats.list_sessions_for_project(project)
+        return {"sessions": [s.to_dict() for s in sessions]}
 
 
 def _step_result(action: str, step: Any) -> dict[str, Any]:

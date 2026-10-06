@@ -41,7 +41,7 @@ class WorkspaceViews:
         ctk.CTkLabel(rail, text="PROJECT", text_color=COLORS["secondary"],
                      font=(FONT, 17, "bold")).pack(anchor="w", padx=14, pady=(15, 10))
         self._nav_buttons = {}
-        for title, label in (("Brief", "1  Project brief"), ("Deliberation", "2  Discussion"),
+        for title, label in (("Brief", "1  Project brief"), ("Claude Chat", "Consultation (Claude)"), ("Deliberation", "2  Discussion"),
                              ("Architecture Proposal", "3  Architecture"), ("Execution Plan", "4  Execution plan"),
                              ("Cline", "5  Coding / Cline"), ("Monitor", "6  Progress & checks"),
                              ("Agents", "Agent settings"), ("Architecture Review", "Quick review"),
@@ -83,6 +83,65 @@ class WorkspaceViews:
 
     def execution_plan_value(self):
         return self._execution_editor.get("1.0", "end-1c")
+
+    def _build_chat_tab(self, notebook):
+        frame = ctk.CTkFrame(notebook, fg_color=COLORS["shell"], corner_radius=0)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(2, weight=1)
+        header = ctk.CTkFrame(frame, fg_color=COLORS["shell"], corner_radius=0)
+        header.grid(row=0, sticky="ew", padx=14, pady=(14, 0))
+        ctk.CTkLabel(header, text="Consultation with Claude", text_color=COLORS["primary"],
+                     font=(FONT, 30, "bold")).pack(side="left")
+        dark_button(header, "New conversation", lambda: self._on_action("chat_new")).pack(side="right")
+        ctk.CTkLabel(frame, text="Ask Claude about your project, constraints or risks. Hand over chosen answers to the lead architect.",
+                     text_color=COLORS["secondary"], wraplength=720).grid(row=1, sticky="ew", padx=14, pady=8)
+        history_frame = ctk.CTkFrame(frame, fg_color=COLORS["card"], corner_radius=6,
+                                     border_width=1, border_color=COLORS["border"])
+        history_frame.grid(row=2, column=0, sticky="nsew", padx=14)
+        history_frame.columnconfigure(0, weight=1)
+        history_frame.rowconfigure(0, weight=1)
+        self._chat_history_text = ctk.CTkTextbox(history_frame, wrap="word", font=(FONT, 16),
+                                                 fg_color=COLORS["field"],
+                                                 text_color=COLORS["primary"], border_width=0,
+                                                 scrollbar_button_color=COLORS["border"])
+        self._chat_history_text.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
+        self._chat_history_text.configure(state="disabled")
+        input_bar = ctk.CTkFrame(frame, fg_color=COLORS["shell"], corner_radius=0)
+        input_bar.grid(row=3, sticky="ew", padx=14, pady=12)
+        input_bar.columnconfigure(0, weight=1)
+        self._chat_input_field = ctk.CTkEntry(input_bar, placeholder_text="Ask a question...",
+                                              font=(FONT, 16), fg_color=COLORS["field"],
+                                              text_color=COLORS["primary"], border_width=1,
+                                              border_color=COLORS["border"])
+        self._chat_input_field.grid(row=0, column=0, sticky="ew")
+        self._chat_input_field.bind("<Return>", lambda _event: self._on_action("chat_ask"))
+        self._chat_send_button = dark_button(input_bar, "Send", lambda: self._on_action("chat_ask"), primary=True)
+        self._chat_send_button.grid(row=0, column=1, padx=(10, 0))
+        
+        self._chat_message_selector = ttk.Combobox(input_bar, state="readonly", width=40)
+        self._chat_message_selector.grid(row=0, column=2, padx=(10, 0))
+        self._chat_message_selector.bind("<<ComboboxSelected>>", self._on_chat_message_selected)
+
+        self._chat_handover_button = dark_button(input_bar, "Nodot galvenajam aģentam",
+                                                 lambda: self._on_action("chat_handover"))
+        self._chat_handover_button.grid(row=0, column=3, padx=(10, 0))
+        notebook.add(frame, text="Claude Chat")
+
+    def _on_chat_message_selected(self, _event):
+        selection = self._chat_message_selector.get()
+        if not selection or " - " not in selection:
+             self._on_chat_selection(None)
+             return
+        msg_id = selection.split(" - ", 1)[0]
+        self._on_chat_selection(msg_id)
+
+    def chat_input_value(self):
+        return self._chat_input_field.get()
+
+    def set_chat_input_value(self, value):
+        self._chat_input_field.delete(0, "end")
+        self._chat_input_field.insert(0, value)
+
 
     def _build_agents_tab(self, notebook):
         frame = ctk.CTkFrame(notebook, fg_color=COLORS["shell"], corner_radius=0)
@@ -126,6 +185,8 @@ class WorkspaceViews:
         frame = ctk.CTkFrame(notebook, fg_color=COLORS["shell"], corner_radius=0)
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(2, weight=1)
+        self._build_chat_tab(notebook)
+
         ctk.CTkLabel(frame, text="Execution plan · editable draft", text_color=COLORS["primary"],
                      font=(FONT, 29, "bold")).grid(row=0, sticky="w", padx=14, pady=(14, 0))
         ctk.CTkLabel(frame, text="Generated from your approved architecture, in dependency order. Review scope and acceptance criteria before importing. Validation changes no workflow state.",
@@ -168,6 +229,39 @@ class WorkspaceViews:
         # Revision feedback stays beside the readable document as well.
         feedback = ctk.CTkFrame(frame, fg_color=COLORS["card"], corner_radius=6,
                                 border_width=1, border_color=COLORS["border"])
+        # Claude Chat rendering
+        chat_history = view.get("chat_history") or []
+        chat_content = ""
+        # Populate assistant message selector for handover
+        assistant_msgs = [m for m in chat_history if m.get("role") == "assistant"]
+        selector_values = [f"{m.get('id')} - {str(m.get('text'))[:50]}..." for m in assistant_msgs]
+        if selector_values != list(self._chat_message_selector["values"]):
+            self._chat_message_selector["values"] = selector_values
+            if selector_values:
+                # If current selection is invalid or missing, select the last one
+                current_sel = self._chat_message_selector.get()
+                if not current_sel or not any(v.startswith(current_sel.split(" - ")[0]) for v in selector_values):
+                     self._chat_message_selector.set(selector_values[-1])
+                     self._on_chat_message_selected(None)
+
+
+        for msg in chat_history:
+            role = str(msg.get("role", "")).upper()
+            text = str(msg.get("text", ""))
+            chat_content += f"{role}:\n{text}\n\n"
+        
+        if chat_content != self._chat_history_text.get("1.0", "end-1c"):
+            self._chat_history_text.configure(state="normal")
+            self._chat_history_text.delete("1.0", "end")
+            self._chat_history_text.insert("1.0", chat_content)
+            self._chat_history_text.see("end")
+            self._chat_history_text.configure(state="disabled")
+        
+        chat_input = str(view.get("chat_input") or "")
+        if chat_input != self.chat_input_value():
+            self.set_chat_input_value(chat_input)
+
+
         feedback.grid(row=1, sticky="ew", pady=6)
         ctk.CTkLabel(feedback, text="REVISION FEEDBACK", text_color=COLORS["muted"],
                      font=(FONT, 14, "bold")).pack(anchor="w", padx=10, pady=(6, 2))

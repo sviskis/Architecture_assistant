@@ -37,11 +37,16 @@ from architecture_assistant.composition import (
 from architecture_assistant.domain.enums import Mode
 
 from .controller import (
+    CHAT_ASK_INTENT,
+    CHAT_HANDOVER_INTENT,
+    CHAT_NEW_INTENT,
     CLEAR_LOGS_INTENT,
+    INTENTS,
     POPUP_INTENTS,
     PROPOSAL_INTENTS,
     PROVIDER_SETTINGS_INTENTS,
     SAVE_SETTINGS_INTENT,
+    CONNECTION_INTENT_KEYS,
     GuiController,
 )
 from .core import BackgroundRunner, CoreWorker
@@ -459,6 +464,8 @@ class GuiApp:
             on_question=self._on_question,
             on_proposal_requirement=self._on_proposal_requirement,
             on_revision_feedback=self._on_revision_feedback,
+            on_chat_selection=self._on_chat_selection,
+
             on_instruction=self._on_instruction,
             layout=self._layout,
         )
@@ -723,6 +730,10 @@ class GuiApp:
                 self._controller.set_provider_selection(
                     self._window.provider_settings_values()
                 )
+        if key == CHAT_ASK_INTENT:
+            if self._window is not None:
+                self._controller.set_chat_input(self._window.chat_input_value())
+
 
         reason = ""
         if intent.human:
@@ -1010,6 +1021,11 @@ class GuiApp:
         """Remember the operator name after the field loses focus."""
         actor = str(value).strip()
         self._controller.actor = actor
+    def _on_chat_selection(self, message_id: Optional[str]) -> None:
+        self._controller.set_selected_message_id(message_id)
+        self._render()
+
+
         save_actor(actor)
 
     def _on_question(self, value: str) -> None:

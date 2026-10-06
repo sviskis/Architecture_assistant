@@ -54,6 +54,9 @@ __all__ = [
     "FindingRepository",
     "DecisionRepository",
     "AuditRepository",
+    "ChatRepository",
+    "HandoverRepository",
+
 ]
 
 
@@ -368,6 +371,40 @@ class AuditRepository(Protocol):
     def append(self, entry: AuditEntry) -> None: ...
 
     def list(self) -> tuple[AuditEntry, ...]: ...
+
+
+@runtime_checkable
+class ChatRepository(Protocol):
+    """Persistence port for chat sessions and messages."""
+
+    def upsert_session(self, session: ChatSession) -> None: ...
+
+    def get_session(self, session_id: str) -> Optional[ChatSession]: ...
+
+    def list_sessions_for_project(
+        self, project: str
+    ) -> tuple[ChatSession, ...]: ...
+
+    def append_message(self, session_id: str, message: ChatMessage) -> None: ...
+    def delete_message(self, session_id: str, message_id: str) -> bool: ...
+
+
+    def list_messages(self, session_id: str) -> tuple[ChatMessage, ...]: ...
+
+    def delete_session(self, session_id: str) -> bool: ...
+
+
+@runtime_checkable
+class HandoverRepository(Protocol):
+    """Persistence port for handover records."""
+
+    def upsert(self, record: HandoverRecord) -> None: ...
+
+    def get(self, record_id: str) -> Optional[HandoverRecord]: ...
+
+    def list_for_project(self, project: str) -> tuple[HandoverRecord, ...]: ...
+
+    def delete(self, record_id: str) -> bool: ...
 
     def list_for_entity(
         self, entity_type: AuditEntityType, entity_id: str

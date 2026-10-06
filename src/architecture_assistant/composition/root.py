@@ -46,6 +46,8 @@ from ..application import (
     ArchitectureBootstrap,
     ArchitectureDeliberation,
     ArchitectureEvolution,
+    ChatService,
+
     ArchitectureReview,
     ArchitectureSynthesis,
     ArchitectureVersioning,
@@ -110,10 +112,15 @@ from .evidence import observe
 from .realization import ArchitectureRealizationAdapter
 from .advisor_factory import (
     AdvisorFactory,
+    create_chat_adapter,
+
     assemble_deliberation,
     assemble_reviewers,
 )
 from .provider_settings import (
+    ADVISOR_KEYS,
+    SETTINGS_KEYS,
+
     DEFAULT_PROVIDER_SETTINGS_PATH,
     SETTINGS_STATUS_LOADED,
     ProviderSettings,
@@ -405,6 +412,12 @@ class Composition:
     #: advisory review board over one operator requirement - two independent
     #: architects, a chair's review, one bounded reconsideration each and a final
     #: synthesis that can become a managed-project proposal. It is wired with the
+    #: The controlled **interactive chat** (Claude chat).
+    #: It is handed the chat adapter, the chat repository and the handover
+    #: repository. It writes nothing to the assistant's workflow state.
+    chat_service: ChatService
+
+
     #: deliberation repository, the proposal repository, the project repository,
     #: the audit trail and the shared transaction boundary - and **no**
     #: ``ArchitectureEvolution``, ``ArchitectureVersioning``, ``ADRManager``,
@@ -727,6 +740,34 @@ def compose(config: Optional[CompositionConfig] = None) -> Composition:
     #     paths above) and no monitor, reporting, worker or architecture port: it
     #     validates a plan file, imports it atomically or refuses, and can never
     #     create, rename or otherwise touch the project identity.
+    # 13. The chat service (Claude chat)
+    # The requirement says: "Claude adapter uses existing settings".
+    # We find the first valid Claude selection in settings.
+    claude_selection = None
+    for key in SETTINGS_KEYS:
+        selection = resolved.provider_settings.selection(key)
+        if selection.provider == "claude" and selection.api_key:
+            claude_selection = selection
+            break
+
+    chat_adapter = None
+    if claude_selection:
+        chat_adapter = create_chat_adapter(
+            claude_selection.provider,
+            model=claude_selection.model,
+            credential=claude_selection.api_key,
+            project=project_name,
+            cost_sink=cost_plugin,
+            clock=resolved.clock,
+        )
+
+    chat_service = ChatService(
+        chat_port=chat_adapter,
+        chat_repo=storage.chats,
+        handover_repo=storage.handovers,
+    )
+
+
     plan_loader = PlanLoader(
         storage.projects,
         storage.steps,
@@ -824,6 +865,8 @@ def compose(config: Optional[CompositionConfig] = None) -> Composition:
         scheduler=scheduler,
         bootstrap_summary=bootstrap_summary,
         versioning_summary=versioning_summary,
+        chat_service=chat_service,
+
         evolution_summary=reconciliation,
         openai_advisor=openai_advisor,
         claude_advisor=claude_advisor,
@@ -936,6 +979,7 @@ def _build_architecture_deliberation(
         storage.projects,
         storage.audit,
         storage,
+        storage.handovers,
         agent_a=agent_a,
         agent_b=agent_b,
         chair=chair,

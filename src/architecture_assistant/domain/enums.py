@@ -32,10 +32,19 @@ __all__ = [
     "SupervisorAction",
     "SupervisorRisk",
     "SupervisorStatus",
+    "ChatRole",
     "SUPERVISION_BLOCKING_STATUSES",
     "SUPERVISION_ALLOWING_STATUSES",
     "SUPERVISION_RECONCILE_STATUSES",
 ]
+
+
+class ChatRole(StrEnum):
+    """Role of a chat message author."""
+
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
 
 
 class Phase(StrEnum):

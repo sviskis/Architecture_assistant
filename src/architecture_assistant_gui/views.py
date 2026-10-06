@@ -318,6 +318,8 @@ class MainWindow(WorkspaceViews):
         on_proposal_requirement: Callable[[str], None] = lambda _text: None,
         on_revision_feedback: Callable[[str], None] = lambda _text: None,
         on_instruction: Callable[[str], None] = lambda _text: None,
+        on_chat_selection: Callable[[Optional[str]], None] = lambda _id: None,
+
         layout: Optional[Mapping[str, Any]] = None,
     ) -> None:
         self._root = root
@@ -332,10 +334,17 @@ class MainWindow(WorkspaceViews):
         self._on_action = on_action
         self._on_actor = on_actor
         self._on_question = on_question
+        self._on_chat_selection = on_chat_selection
+
         self._on_proposal_requirement = on_proposal_requirement
         self._on_revision_feedback = on_revision_feedback
         self._on_instruction = on_instruction
         self.buttons: dict[str, ttk.Button] = {}
+        self._nav_buttons = {}
+        self._brief_rendered = ""
+        self._draft_rendered = ""
+        self._chat_rendered = ""
+
         self._text: dict[str, tk.StringVar] = {}
         #: The draggable splits. Every major region lives in one of these, so the
         #: operator resizes the window with the mouse instead of accepting a
@@ -1047,6 +1056,15 @@ class MainWindow(WorkspaceViews):
             wraplength=980,
             justify="left",
         ).grid(row=3, column=0, sticky="ew", pady=(4, 0))
+        handover_frame = ttk.LabelFrame(frame, text="User Consultation Notes (from Claude chat)", padding=(6, 4))
+        handover_frame.grid(row=4, column=0, sticky="ew", pady=(10, 0))
+        handover_frame.columnconfigure(0, weight=1)
+        self._handover_preview = tk.Text(
+            handover_frame, height=4, font=FONT, bg=COLORS["field"], fg=COLORS["primary"]
+        )
+        self._handover_preview.grid(row=0, column=0, sticky="ew")
+        self._handover_preview.configure(state="disabled")
+
         notebook.add(frame, text="Deliberation")
 
     def _render_deliberation(self, view: Mapping[str, Any]) -> None:
@@ -2032,6 +2050,16 @@ class MainWindow(WorkspaceViews):
             tuple(view.get("monitor", {}).get("rows") or ()),
             ("field", "value"),
         )
+        handovers = view.get("handovers") or []
+        handover_text = ""
+        for h in handovers:
+            handover_text += f"--- From {h.get('provider')} ({h.get('model')}) ---\n{h.get('text')}\n\n"
+
+        if hasattr(self, "_handover_preview"):
+            self._handover_preview.configure(state="normal")
+            self._handover_preview.delete("1.0", "end")
+            self._handover_preview.insert("1.0", handover_text or "No consultation notes handed over yet.")
+            self._handover_preview.configure(state="disabled")
         # The audit trail, the risk register and the runtime log are popups now:
         # they are read from the same payload in the application, so nothing is
         # rendered from them here and nothing about them is lost.

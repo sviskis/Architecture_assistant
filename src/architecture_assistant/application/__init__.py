@@ -137,6 +137,8 @@ from .reporting import (
     ProjectMissingError,
     ReportBuilder,
     ReportingError,
+from .chat_service import ChatService
+
     ReportingInvariantError,
     ReportSnapshot,
 )
@@ -524,6 +526,8 @@ __all__ = [
     "ACTION_GENERATE_LEAD_REVIEW",
     "ACTION_RUN_ROUND2",
     "ACTION_GENERATE_FINAL_SYNTHESIS",
+    "ChatService",
+
     "ACTION_GENERATE_PROPOSAL",
     "ACTION_CANCEL",
     # the log-event contract (Step 27, ephemeral operator-facing logs)

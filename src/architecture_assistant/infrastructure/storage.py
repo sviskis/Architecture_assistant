@@ -11,10 +11,14 @@ import sqlite3
 from contextlib import AbstractContextManager
 
 from ..ports.repositories import (
+    ChatRepository,
+
     ADRRepository,
     ArchitectureChangeRequestRepository,
     ArchitectureProposalRepository,
     ArchitectureVersionRepository,
+    HandoverRepository,
+
     AuditRepository,
     DecisionRepository,
     DeliberationRepository,
@@ -23,10 +27,14 @@ from ..ports.repositories import (
     RiskRepository,
     StepRepository,
     SupervisionRepository,
+    SqliteChatRepository,
+
     TaskRepository,
 )
 from .repositories import (
     SqliteADRRepository,
+    SqliteHandoverRepository,
+
     SqliteArchitectureChangeRequestRepository,
     SqliteArchitectureProposalRepository,
     SqliteArchitectureVersionRepository,
@@ -64,6 +72,9 @@ class SqliteStorage:
             connection
         )
         self._proposals = SqliteArchitectureProposalRepository(connection)
+        self._chats = SqliteChatRepository(connection)
+        self._handovers = SqliteHandoverRepository(connection)
+
         self._deliberations = SqliteDeliberationRepository(connection)
         self._supervisions = SqliteSupervisionRepository(connection)
         self._adrs = SqliteADRRepository(connection)
@@ -132,6 +143,14 @@ class SqliteStorage:
     @property
     def decisions(self) -> DecisionRepository:
         return self._decisions
+
+    @property
+    def chats(self) -> ChatRepository:
+        return self._chats
+
+    @property
+    def handovers(self) -> HandoverRepository:
+        return self._handovers
 
     @property
     def audit(self) -> AuditRepository:

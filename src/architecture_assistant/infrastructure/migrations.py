@@ -33,7 +33,15 @@ __all__ = [
     "SUPERVISION_TABLE_NAME",
     "DELIBERATION_RUN_TABLE_NAME",
     "DELIBERATION_ARTIFACT_TABLE_NAME",
+    "CHAT_SESSION_TABLE_NAME",
+    "CHAT_MESSAGE_TABLE_NAME",
+    "HANDOVER_TABLE_NAME",
 ]
+
+#: Table names for the SQLite schema.
+CHAT_SESSION_TABLE_NAME = "chat_sessions"
+CHAT_MESSAGE_TABLE_NAME = "chat_messages"
+HANDOVER_TABLE_NAME = "handover_records"
 
 
 #: Bootstrap DDL - always executed before the versioned migrations.
@@ -569,6 +577,70 @@ def _migration_007_down(conn: sqlite3.Connection) -> None:
     conn.execute(f"DROP TABLE IF EXISTS {DELIBERATION_RUN_TABLE_NAME}")
 
 
+_MIGRATION_008_STATEMENTS: tuple[str, ...] = (
+    f"""
+    CREATE TABLE {CHAT_SESSION_TABLE_NAME} (
+        id TEXT PRIMARY KEY,
+        project TEXT NOT NULL,
+        agent_slot TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )
+    """,
+    f"""
+    CREATE INDEX idx_chat_sessions_project
+        ON {CHAT_SESSION_TABLE_NAME} (project, created_at)
+    """,
+    f"""
+    CREATE TABLE {CHAT_MESSAGE_TABLE_NAME} (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        text TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        CONSTRAINT fk_chat_messages_session FOREIGN KEY (session_id)
+            REFERENCES {CHAT_SESSION_TABLE_NAME}(id) ON DELETE CASCADE
+    )
+    """,
+    f"""
+    CREATE INDEX idx_chat_messages_session
+        ON {CHAT_MESSAGE_TABLE_NAME} (session_id, created_at)
+    """,
+    f"""
+    CREATE TABLE {HANDOVER_TABLE_NAME} (
+        id TEXT PRIMARY KEY,
+        project TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        actor TEXT NOT NULL DEFAULT '',
+        reason TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL
+    )
+    """,
+    f"""
+    CREATE INDEX idx_handover_records_project
+        ON {HANDOVER_TABLE_NAME} (project, created_at)
+    """,
+)
+
+
+def _migration_008_chat_handover(conn: sqlite3.Connection) -> None:
+    """Create the chat and handover tables."""
+    for statement in _MIGRATION_008_STATEMENTS:
+        conn.execute(statement)
+
+
+def _migration_008_down(conn: sqlite3.Connection) -> None:
+    """Drop the chat and handover tables."""
+    conn.execute(f"DROP TABLE IF EXISTS {HANDOVER_TABLE_NAME}")
+    conn.execute(f"DROP TABLE IF EXISTS {CHAT_MESSAGE_TABLE_NAME}")
+    conn.execute(f"DROP TABLE IF EXISTS {CHAT_SESSION_TABLE_NAME}")
+
+
 #: Ordered migration list. Versions must be unique and strictly increasing.
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(
@@ -612,5 +684,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         name="architecture_deliberations",
         up=_migration_007_deliberations,
         down=_migration_007_down,
+    ),
+    Migration(
+        version=8,
+        name="chat_and_handover",
+        up=_migration_008_chat_handover,
+        down=_migration_008_down,
     ),
 )
